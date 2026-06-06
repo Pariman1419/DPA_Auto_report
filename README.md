@@ -130,16 +130,40 @@ DPA/
 └── docker-compose.yml
 ```
 
+## 🔄 End-to-End Workflow (two separate systems)
+
+This repo is **System 2** of a two-part platform. The systems are decoupled and communicate only
+through a **shared PostgreSQL database + image file share** — each can be deployed and run
+independently.
+
+```
+╔════════ SYSTEM 1 · Auto_detect (separate repo) ════════╗
+║  Raw inspection images (doc/)                          ║
+║     → FastSAM AI segmentation + OCR                     ║
+║     → crop ROI, extract measurements                   ║
+║     → write Result/ (images + JSON)                    ║
+╚═══════════════════════╤════════════════════════════════╝
+                        │ writes
+                        ▼
+              ┌───────────────────────┐
+              │  PostgreSQL  +  image │   ← shared boundary
+              │  file share (Result/) │
+              └───────────┬───────────┘
+                        │ reads
+                        ▼
+╔════════ SYSTEM 2 · DPA Auto Report (THIS REPO) ════════╗
+║  React wizard: select PR → verify data → generate      ║
+║     → FastAPI fetches PR metadata + image paths        ║
+║     → python-pptx fills the template slide-by-slide    ║
+║     → download .pptx  +  log to generation_history     ║
+╚════════════════════════════════════════════════════════╝
+```
+
 ## 🔗 Related project
 
 - **[Auto_detect — AI DPA Image Extraction Pipeline](https://github.com/Pariman1419/Auto_detect)**
-  is the upstream data engine for this app. It scans raw DPA inspection images, uses **FastSAM**
-  AI segmentation + OCR to crop and extract measurements, and syncs the results into the same
-  PostgreSQL database that this report generator reads from.
-
-```
-Auto_detect  (AI extraction)  ──►  PostgreSQL  ──►  DPA Auto Report  (this repo → PPTX)
-```
+  is the upstream data engine (System 1 above) that produces the images and measurements this
+  report generator consumes.
 
 ## 📄 License
 
