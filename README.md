@@ -2,9 +2,10 @@
 
 > A full-stack web application that automates PowerPoint (PPTX) report generation for
 > **semiconductor package reliability testing (DPA — Destructive Physical Analysis)**.
-> It pulls test data from PostgreSQL and inspection images from a file share, then fills a
-> corporate PPTX template slide-by-slide — turning a multi-hour manual reporting task into a
-> few clicks.
+> It pulls test data from PostgreSQL and inspection images (produced by the AI
+> [Auto_detect](https://github.com/Pariman1419/Auto_detect) pipeline) from a file share, then
+> fills a corporate PPTX template slide-by-slide — turning a multi-hour manual reporting task
+> into a few clicks.
 
 <p align="left">
   <img alt="Python" src="https://img.shields.io/badge/Python-3.11-3776AB?logo=python&logoColor=white">
@@ -127,6 +128,17 @@ DPA/
 ├── docs/           additional design & architecture docs
 ├── schema.sql      database schema
 └── docker-compose.yml
+```
+
+## 🔗 Related project
+
+- **[Auto_detect — AI DPA Image Extraction Pipeline](https://github.com/Pariman1419/Auto_detect)**
+  is the upstream data engine for this app. It scans raw DPA inspection images, uses **FastSAM**
+  AI segmentation + OCR to crop and extract measurements, and syncs the results into the same
+  PostgreSQL database that this report generator reads from.
+
+```
+Auto_detect  (AI extraction)  ──►  PostgreSQL  ──►  DPA Auto Report  (this repo → PPTX)
 ```
 
 ## 📄 License
