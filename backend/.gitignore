@@ -1,0 +1,33 @@
+# Environment
+.env
+.env.*
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+
+# Virtual environment
+venv/
+.venv/
+
+# Dev/debug scripts
+scripts/
+
+# Logs
+logs/
+*.log
+
+# Generated reports (stored at runtime)
+output/
+
+# IDE
+.vscode/
+.idea/
+
+# Ruff cache
+.ruff_cache/

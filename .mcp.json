@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "powerpoint": {
+      "command": "C:\\Users\\ProautomationSV\\AppData\\Local\\Programs\\Python\\Python311\\python.exe",
+      "args": [
+        "D:\\DPA\\DPAOffice-PowerPoint-MCP-Server\\ppt_mcp_server.py"
+      ],
+      "env": {
+        "PYTHONPATH": "D:\\DPA\\DPAOffice-PowerPoint-MCP-Server",
+        "PPT_TEMPLATE_PATH": "D:\\DPA\\Template"
+      }
+    }
+  }
+}

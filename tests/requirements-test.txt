@@ -1,0 +1,27 @@
+# Core test stack
+pytest==8.3.5
+pytest-mock==3.14.0
+pytest-cov==6.1.0
+pytest-asyncio==0.24.0
+httpx==0.28.1
+
+# FastAPI test client
+starlette==1.0.0
+
+# DB helpers (integration tests)
+psycopg2-binary==2.9.10
+factory-boy==3.3.1
+
+# Assertions / data
+faker==33.1.0
+
+# Frontend E2E
+playwright==1.50.0
+
+# python-pptx for PPTX generation tests
+python-pptx==1.0.2
+Pillow==11.1.0
+
+# Install backend deps first:
+# pip install -r backend/requirements.txt
+# pip install -r tests/requirements-test.txt

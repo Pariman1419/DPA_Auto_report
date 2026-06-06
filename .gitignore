@@ -1,0 +1,60 @@
+# ─────────────── Secrets / Environment ───────────────
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# ─────────────── Python (backend) ───────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+backend/venv/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# ─────────────── Node / Frontend ───────────────
+node_modules/
+frontend/dist/
+frontend/node_modules/
+*.local
+
+# ─────────────── Build / Runtime output ───────────────
+output/
+backend/logs/
+backend/scripts/
+*.log
+dist/
+build/
+
+# ─────────────── Generated / Data artifacts ───────────────
+doc/
+Template/
+*.pptx
+*.xlsx
+*.xls
+
+# ─────────────── IDE / OS ───────────────
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# ─────────────── AI tooling & local notes (not part of the app) ───────────────
+.agent/
+.agents/
+.antigravitycli/
+.claude/
+.code-review-graph/
+.obsidian/
+graphify-out/
+DPAOffice-PowerPoint-MCP-Server/
+Claude Chats/
+Claude Code/
+Claude Chats.md
+Claude Code.md
+CODE_REVIEW_*.md

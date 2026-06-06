@@ -1,0 +1,44 @@
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: dpa-backend:latest
+    restart: unless-stopped
+    # Load DB/auth credentials from .env — paths overridden below for container context
+    env_file: ./backend/.env
+    environment:
+      DOC_ROOT: /app/doc
+      TEMPLATE_PATH: /app/Template/DPA report.pptx
+      OUTPUT_DIR: /app/output
+      # Allow requests from nginx (same host) and any IP the server is on
+      ALLOWED_ORIGINS: "http://10.153.90.17:3000,http://localhost:3000"
+      # Path translation: DB stores Windows paths, container sees /app/auto_result
+      IMAGE_WIN_ROOT: "D:\\Auto_detect\\Result"
+      IMAGE_MOUNT_ROOT: /app/auto_result
+    volumes:
+      # Generated PPTX reports — persist on host
+      - ./output:/app/output
+      # PPTX template — read-only, update without rebuild
+      - ./Template:/app/Template:ro
+      # Auto_detect result images — read-only
+      - D:\Auto_detect\Result:/app/auto_result:ro
+    networks:
+      - dpa-net
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    image: dpa-frontend:latest
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    networks:
+      - dpa-net
+
+networks:
+  dpa-net:
+    driver: bridge

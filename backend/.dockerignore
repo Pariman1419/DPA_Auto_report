@@ -1,0 +1,14 @@
+venv/
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+.ruff_cache/
+.pytest_cache/
+.env
+scratch_*.py
+debug_*.py
+check_*.py
+add_test_user.py
+test_*.py
+*.md
