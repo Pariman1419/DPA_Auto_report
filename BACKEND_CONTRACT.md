@@ -32,7 +32,7 @@ All endpoints require authentication unless marked **[public]**
 // Clears dpa_token cookie
 ```
 
-### POST /api/auth/register **[public]**
+### POST /api/auth/register **[public]** **[rate: 5/min]**
 ```json
 // Request
 {
@@ -49,7 +49,7 @@ All endpoints require authentication unless marked **[public]**
 // Error 503 — DB unavailable
 ```
 
-### GET /api/auth/approve/{token} **[admin, QA Engineer only]**
+### GET /api/auth/approve/{token} **[admin, QA Engineer only]** **[rate: 5/min]**
 ```
 // token — signed itsdangerous token (24h expiry) from approval email
 
@@ -205,7 +205,7 @@ All endpoints require authentication unless marked **[public]**
 
 ## Report Generation
 
-### POST /api/generate-report
+### POST /api/generate-report **[rate: 3/min]**
 ```json
 // Request
 {
@@ -279,6 +279,7 @@ Content-Disposition: attachment; filename="DPA_Report_..."
 // Response 200
 { "status": "deleted" }
 
+// Error 403 — caller is neither the record's owner nor an admin
 // Error 404 — record not found
 ```
 
@@ -294,7 +295,7 @@ Content-Disposition: attachment; filename="DPA_Report_..."
 // Error 404 — file not found
 ```
 
-### GET /api/download-report?path={path}
+### GET /api/download-report?path={path} **[rate: 10/min]**
 ```
 // path — must be inside OUTPUT_DIR or IMAGE_MOUNT_ROOT
 // Response 200 — FileResponse (PPTX)

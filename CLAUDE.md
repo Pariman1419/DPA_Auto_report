@@ -60,6 +60,7 @@ Optional but important:
 | `OUTPUT_DIR` | `D:\DPA\output` | Where generated reports are saved |
 | `IMAGE_WIN_ROOT` | `D:\Auto_detect\Result` | Path prefix stored in DB |
 | `IMAGE_MOUNT_ROOT` | same as `IMAGE_WIN_ROOT` | Where that path is mounted locally |
+| `PIPELINE_COMPOSE_PATH` | `D:\Auto_detect\docker-compose.yml` | docker-compose file used as a fallback to restart the Auto_detect pipeline when HTTP trigger URLs fail |
 | `ALLOWED_ORIGINS` | `http://localhost:3000` | Comma-separated CORS origins |
 | `COOKIE_SECURE` | `false` | Set `true` in HTTPS production |
 | `SMTP_HOST`, `SMTP_PORT`, `APPROVER_EMAIL`, `SENDER_EMAIL`, `BASE_URL` | — | Email for user approval workflow |
