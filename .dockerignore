@@ -1,0 +1,25 @@
+# Root-level ignore file: defense-in-depth for any build invoked with the
+# repo root as context (e.g. `docker build -f backend/Dockerfile .`). The
+# per-service .dockerignore files (backend/.dockerignore, frontend/.dockerignore)
+# are authoritative for the default docker-compose.yml contexts (./backend,
+# ./frontend); this file exists so a root-context build can't accidentally
+# pick up the same local/dev/test artifacts.
+.git/
+.gitignore
+.pnpm-store/
+node_modules/
+venv/
+__pycache__/
+**/__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+tests/
+docs/
+.superpowers/
+.claude/
+scripts/dev/
+logs/
+*.log
+.env
+.env.*

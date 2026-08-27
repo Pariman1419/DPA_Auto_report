@@ -7,6 +7,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
+ARG APP_GIT_SHA=unknown
+ENV APP_GIT_SHA=${APP_GIT_SHA}
+LABEL org.opencontainers.image.revision=${APP_GIT_SHA}
+
 EXPOSE 9090
 
 # Disable reload for production; use 2 workers

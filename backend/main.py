@@ -113,7 +113,7 @@ async def request_log_middleware(request: Request, call_next):
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    return {"status": "ok", "gitSha": os.getenv("APP_GIT_SHA", "unknown")}
 
 
 if __name__ == "__main__":

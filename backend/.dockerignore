@@ -6,9 +6,14 @@ __pycache__/
 .ruff_cache/
 .pytest_cache/
 .env
+.env.*
+.git/
 scratch_*.py
 debug_*.py
 check_*.py
 add_test_user.py
 test_*.py
+scripts/dev/
+logs/
+*.log
 *.md

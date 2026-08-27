@@ -3,6 +3,8 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+      args:
+        APP_GIT_SHA: ${GIT_SHA:-unknown}
     image: dpa-backend:latest
     restart: unless-stopped
     # Load DB/auth credentials from .env — paths overridden below for container context
@@ -30,6 +32,8 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        APP_GIT_SHA: ${GIT_SHA:-unknown}
     image: dpa-frontend:latest
     restart: unless-stopped
     ports:

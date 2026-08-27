@@ -18,4 +18,8 @@ FROM nginx:alpine
 COPY --from=builder /app/dist /usr/share/nginx/html
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 
+ARG APP_GIT_SHA=unknown
+ENV APP_GIT_SHA=${APP_GIT_SHA}
+LABEL org.opencontainers.image.revision=${APP_GIT_SHA}
+
 EXPOSE 80
