@@ -68,7 +68,7 @@ def _guard_self_and_last_admin(actor: dict, target_user_id: str, action: str) ->
 
 
 @router.get("/accounts")
-@limiter.limit("5/minute")
+@limiter.limit("30/minute")
 def list_accounts(
     request: Request,
     status: Optional[str] = None,
@@ -148,7 +148,7 @@ def delete_account(
 
 
 @router.get("/accounts/{user_id}/activity")
-@limiter.limit("5/minute")
+@limiter.limit("30/minute")
 def account_activity(
     request: Request,
     user_id: str,
@@ -160,7 +160,7 @@ def account_activity(
 
 
 @router.get("/accounts/{user_id}/performance")
-@limiter.limit("5/minute")
+@limiter.limit("30/minute")
 def account_performance(
     request: Request,
     user_id: str,
