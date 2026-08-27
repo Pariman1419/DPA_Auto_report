@@ -5,9 +5,13 @@ from datetime import datetime, timezone, timedelta
 import bcrypt
 from jose import jwt
 
+from logger import get_logger
+
+log = get_logger("auth_service")
+
 SECRET_KEY = os.getenv("JWT_SECRET_KEY", "")
 if not SECRET_KEY:
-    print("[ERROR] JWT_SECRET_KEY is not set. Set it in .env before starting.", file=sys.stderr)
+    log.error("JWT_SECRET_KEY is not set. Set it in .env before starting.")
     sys.exit(1)
 
 ALGORITHM = "HS256"

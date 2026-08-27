@@ -15,7 +15,7 @@ log = get_logger("db_connector")
 def _require(name: str) -> str:
     val = os.getenv(name, "")
     if not val:
-        print(f"[ERROR] Required environment variable '{name}' is not set.", file=sys.stderr)
+        log.error("Required environment variable '%s' is not set.", name)
         sys.exit(1)
     return val
 
