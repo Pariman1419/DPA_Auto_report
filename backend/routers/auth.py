@@ -1,6 +1,7 @@
 import hashlib
 import os
 import smtplib
+from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
 from typing import Optional
 
@@ -124,6 +125,20 @@ def login(request: Request, req: LoginRequest, response: Response):
                     (hash_password(req.password), req.userId),
                 )
             conn.commit()
+
+        session_expires_at = datetime.now(timezone.utc) + timedelta(hours=ACCESS_TOKEN_EXPIRE_HOURS)
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO user_sessions (user_id, ip_address, user_agent, expires_at) "
+                "VALUES (%s, %s, %s, %s)",
+                (
+                    user["user_id"],
+                    request.client.host if request.client else None,
+                    request.headers.get("user-agent"),
+                    session_expires_at,
+                ),
+            )
+        conn.commit()
 
         token = create_access_token({
             "sub":  user["user_id"],

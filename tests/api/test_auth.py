@@ -32,11 +32,28 @@ def test_login_success(client, mock_db, sample_user):
     
     # Assert httpOnly cookie is set
     assert "dpa_token" in response.cookies
-    cur.execute.assert_called_with(
+    select_calls = [
+        call for call in cur.execute.call_args_list
+        if "SELECT user_id, full_name, role, password_hash, session_version" in call[0][0]
+    ]
+    assert len(select_calls) == 1
+    assert select_calls[0][0][0] == (
         "SELECT user_id, full_name, role, password_hash, session_version "
-        "FROM users WHERE user_id = %s AND is_active = True",
-        ("EMP001",)
+        "FROM users WHERE user_id = %s AND is_active = True"
     )
+    assert select_calls[0][0][1] == ("EMP001",)
+
+    # A user_sessions row is written on successful login, for session history
+    session_insert_calls = [
+        call for call in cur.execute.call_args_list
+        if "INSERT INTO user_sessions" in call[0][0]
+    ]
+    assert len(session_insert_calls) == 1
+    insert_params = session_insert_calls[0][0][1]
+    assert insert_params[0] == "EMP001"
+    assert insert_params[1] is not None  # ip_address
+    assert insert_params[2] is not None  # user_agent
+    assert insert_params[3] is not None  # expires_at
 
     # New tokens carry the user's current session_version as the `sv` claim
     from services.auth_service import decode_token
@@ -66,7 +83,17 @@ def test_login_password_upgrade(client, mock_db, sample_user):
     ]
     assert len(update_calls) == 1
     assert update_calls[0][0][1][1] == "EMP001"
-    assert conn.commit.call_count == 1
+
+    # A user_sessions row is also written on this login path
+    session_insert_calls = [
+        call for call in cur.execute.call_args_list
+        if "INSERT INTO user_sessions" in call[0][0]
+    ]
+    assert len(session_insert_calls) == 1
+    assert session_insert_calls[0][0][1][0] == "EMP001"
+
+    # One commit for the password upgrade, one for the session insert
+    assert conn.commit.call_count == 2
 
 
 def test_login_invalid_password(client, mock_db, sample_user):
