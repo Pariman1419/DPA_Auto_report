@@ -33,16 +33,42 @@ function fmtDate(v) {
 // close so the raw one-time link doesn't linger anywhere (no localStorage).
 // ---------------------------------------------------------------------------
 function ResetLinkModal({ resetUrl, onClose }) {
-  const [copied, setCopied] = React.useState(false);
+  const [copyState, setCopyState] = React.useState('idle'); // idle | copied | failed
+
+  // navigator.clipboard.writeText requires a secure context (HTTPS or
+  // localhost) -- it's unavailable when the admin UI is reached over plain
+  // HTTP on a LAN IP, which is common for this app. Fall back to the older
+  // execCommand('copy') via a hidden textarea, which works there too.
+  const legacyCopy = (text) => {
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.style.position = 'fixed';
+    textarea.style.opacity = '0';
+    document.body.appendChild(textarea);
+    textarea.focus();
+    textarea.select();
+    let ok = false;
+    try {
+      ok = document.execCommand('copy');
+    } catch {
+      ok = false;
+    }
+    document.body.removeChild(textarea);
+    return ok;
+  };
 
   const handleCopy = async () => {
     try {
-      await navigator.clipboard.writeText(resetUrl);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(resetUrl);
+      } else if (!legacyCopy(resetUrl)) {
+        throw new Error('copy unsupported');
+      }
+      setCopyState('copied');
     } catch {
-      // clipboard API unavailable — user can still select the text manually
+      setCopyState('failed');
     }
+    setTimeout(() => setCopyState('idle'), 1500);
   };
 
   return (
@@ -64,7 +90,9 @@ function ResetLinkModal({ resetUrl, onClose }) {
         </div>
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
           <Btn variant="ghost" onClick={onClose}>Close</Btn>
-          <Btn variant="ghost" onClick={handleCopy}>{copied ? 'Copied ✓' : 'Copy'}</Btn>
+          <Btn variant="ghost" onClick={handleCopy}>
+            {copyState === 'copied' ? 'Copied ✓' : copyState === 'failed' ? 'Copy failed' : 'Copy'}
+          </Btn>
           <Btn variant="primary" onClick={() => window.open(resetUrl, '_blank')}>Open</Btn>
         </div>
       </div>
