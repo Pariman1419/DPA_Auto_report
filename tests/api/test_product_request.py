@@ -67,20 +67,64 @@ def test_download_history_file_not_found_disk(client, auth_cookies, sample_histo
         assert response.json()["detail"] == "File not found on disk"
 
 
-def test_delete_history_success(client, auth_cookies):
-    """Delete endpoint returns status: deleted when deletion succeeds."""
-    with patch("routers.product_request.delete_history_record", return_value=True):
+def test_delete_history_success_owner(client, auth_cookies, sample_history):
+    """Delete endpoint returns status: deleted when the caller owns the record.
+
+    auth_cookies is a QA Engineer token for user_id "EMP001"; sample_history's
+    user_id is also "EMP001" (see tests/conftest.py SAMPLE_HISTORY_ROW).
+    """
+    with patch("routers.product_request.get_history_record", return_value=dict(sample_history)), \
+         patch("routers.product_request.delete_history_record", return_value=True):
         response = client.delete("/api/history/1", cookies=auth_cookies)
         assert response.status_code == 200
         assert response.json() == {"status": "deleted"}
 
 
+def test_delete_history_success_admin_on_others_record(client, admin_cookies, sample_history):
+    """Delete endpoint returns status: deleted when the caller is admin, even if not the owner."""
+    other_users_record = dict(sample_history)
+    other_users_record["user_id"] = "EMP999"
+    with patch("routers.product_request.get_history_record", return_value=other_users_record), \
+         patch("routers.product_request.delete_history_record", return_value=True):
+        response = client.delete("/api/history/1", cookies=admin_cookies)
+        assert response.status_code == 200
+        assert response.json() == {"status": "deleted"}
+
+
+def test_delete_history_forbidden_non_owner_non_admin(client, auth_cookies, sample_history):
+    """Delete endpoint returns 403 if the caller is neither admin nor the record's owner."""
+    other_users_record = dict(sample_history)
+    other_users_record["user_id"] = "EMP999"
+    with patch("routers.product_request.get_history_record", return_value=other_users_record):
+        response = client.delete("/api/history/1", cookies=auth_cookies)
+        assert response.status_code == 403
+        assert response.json()["detail"] == "Insufficient permissions"
+
+
 def test_delete_history_not_found(client, auth_cookies):
     """Delete endpoint returns 404 if history record does not exist."""
-    with patch("routers.product_request.delete_history_record", return_value=False):
+    with patch("routers.product_request.get_history_record", return_value=None):
         response = client.delete("/api/history/999", cookies=auth_cookies)
         assert response.status_code == 404
         assert response.json()["detail"] == "Record not found"
+
+
+def test_trigger_pipeline_forbidden_for_non_admin(client, auth_cookies):
+    """trigger-pipeline is admin-only; a QA Engineer token gets 403."""
+    response = client.post("/api/trigger-pipeline", cookies=auth_cookies)
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Insufficient permissions"
+
+
+def test_trigger_pipeline_allowed_for_admin(client, admin_cookies):
+    """trigger-pipeline succeeds for an admin token (HTTP path mocked)."""
+    with patch("urllib.request.urlopen") as mock_urlopen:
+        mock_response = MagicMock()
+        mock_response.status = 200
+        mock_urlopen.return_value.__enter__.return_value = mock_response
+        response = client.post("/api/trigger-pipeline", cookies=admin_cookies)
+        assert response.status_code == 200
+        assert response.json()["status"] == "success"
 
 
 # ── Product Requests metadata ──────────────────────────────────────────────────
