@@ -80,12 +80,12 @@ def get_current_user(
                     (payload.get("sub"),),
                 )
                 row = cur.fetchone()
-            if not row or row[0] != sv or row[1] != "active":
-                raise HTTPException(status_code=401, detail="Invalid or expired token")
-            session_id = payload.get("sid")
-            if session_id:
-                cur.execute("UPDATE user_sessions SET last_seen_at = now() WHERE session_id = %s", (session_id,))
-                conn.commit()
+                if not row or row[0] != sv or row[1] != "active":
+                    raise HTTPException(status_code=401, detail="Invalid or expired token")
+                session_id = payload.get("sid")
+                if session_id:
+                    cur.execute("UPDATE user_sessions SET last_seen_at = now() WHERE session_id = %s", (session_id,))
+                    conn.commit()
         finally:
             DBConnector.release_dpa_connection(conn)
 
@@ -132,7 +132,7 @@ def login(request: Request, req: LoginRequest, response: Response):
             conn.commit()
 
         session_expires_at = datetime.now(timezone.utc) + timedelta(hours=ACCESS_TOKEN_EXPIRE_HOURS)
-        session_id = uuid4()
+        session_id = str(uuid4())
         with conn.cursor() as cur:
             cur.execute(
                 "INSERT INTO user_sessions (user_id, session_id, ip_address, user_agent, expires_at, last_seen_at) "
