@@ -221,11 +221,15 @@ def trigger_pipeline(request: Request, _user=Depends(require_role("admin"))):
     ]
     urls = list(dict.fromkeys([u for u in urls if u]))
     
+    trigger_token = os.getenv("WATCHER_TRIGGER_TOKEN", "")
+
     triggered_via_http = False
     http_error_msg = ""
     for url in urls:
         try:
-            req = urllib.request.Request(url, data=b'')
+            req = urllib.request.Request(
+                url, data=b'', headers={"X-Trigger-Token": trigger_token}
+            )
             with urllib.request.urlopen(req, timeout=3.0) as response:
                 if response.status == 200:
                     triggered_via_http = True
