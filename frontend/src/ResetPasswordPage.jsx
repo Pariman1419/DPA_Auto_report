@@ -4,7 +4,7 @@ import { Card, CalSans, Btn, TextInput, FieldLabel } from './Components.jsx';
 // Public page — no auth check, no Sidebar. Reached via a real URL
 // (/reset-password/{token}) that App.jsx recognizes before the auth gate,
 // since the person opening this link is not logged in.
-export function ResetPasswordPage({ token }) {
+export default function ResetPasswordPage({ token }) {
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [error, setError] = useState('');

@@ -17,10 +17,10 @@ import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from psycopg2.extras import Json, RealDictCursor
+from psycopg2.extras import RealDictCursor
 
 from services.db_connector import DBConnector
-from services.audit_service import AuditEvent, write_audit_event, mirror_event, _sanitize_state
+from services.audit_service import AuditEvent, write_audit_event, mirror_event, _sanitize_state, _json_state
 from logger import get_logger
 
 log = get_logger("account_admin_service")
@@ -253,8 +253,8 @@ def permanently_delete(
                     event.actor_user_id,
                     event.target_user_id,
                     event.action,
-                    Json(sanitized_before) if sanitized_before is not None else None,
-                    Json(sanitized_after) if sanitized_after is not None else None,
+                    _json_state(sanitized_before),
+                    _json_state(sanitized_after),
                     event.occurred_at,
                 ),
             )

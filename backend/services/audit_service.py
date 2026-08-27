@@ -59,6 +59,18 @@ def _sanitize_state(state: Optional[dict]) -> Optional[dict]:
     }
 
 
+def _json_state(state: Optional[dict]) -> Optional[Json]:
+    """
+    Wrap a sanitized before/after dict for JSONB storage. before/after
+    snapshots come straight from RealDictCursor rows and can contain
+    non-JSON-native types (datetime, Decimal, UUID) -- default=str keeps
+    those from raising instead of silently dropping the whole audit write.
+    """
+    if state is None:
+        return None
+    return Json(state, dumps=lambda obj: json.dumps(obj, default=str))
+
+
 def write_audit_event(event: AuditEvent):
     """
     Insert one row into account_audit_logs, then mirror a sanitized copy to
@@ -83,8 +95,8 @@ def write_audit_event(event: AuditEvent):
                     event.actor_user_id,
                     event.target_user_id,
                     event.action,
-                    Json(before) if before is not None else None,
-                    Json(after) if after is not None else None,
+                    _json_state(before),
+                    _json_state(after),
                     event.occurred_at,
                 ),
             )
