@@ -83,7 +83,8 @@ def get_product_request(pr_number: str, _user=Depends(get_current_user)):
 
 
 @router.get("/download-report")
-def download_report(path: str, _user=Depends(get_current_user)):
+@limiter.limit("10/minute")
+def download_report(request: Request, path: str, _user=Depends(get_current_user)):
     """Download a generated report — path must be inside OUTPUT_DIR or auto_result mount."""
     safe_root   = pathlib.Path(OUTPUT_DIR).resolve()
     result_root = pathlib.Path(
@@ -128,7 +129,8 @@ def get_pr_next_revision(pr_number: str, timepoint: str, _user=Depends(get_curre
 
 
 @router.post("/generate-report")
-def generate_dpa_report(req: GenerateReportRequest, _user=Depends(get_current_user)):
+@limiter.limit("3/minute")
+def generate_dpa_report(request: Request, req: GenerateReportRequest, _user=Depends(get_current_user)):
     """Trigger PPTX generation."""
     try:
         next_rev = get_next_revision(req.prNumber, req.timepoint)

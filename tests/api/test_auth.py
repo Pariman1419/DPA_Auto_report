@@ -153,6 +153,32 @@ def test_register_already_registered(client, mock_db):
     assert response.json()["detail"] == "Employee ID already registered"
 
 
+def test_register_rate_limited(client, mock_db):
+    """POST /api/auth/register is limited to 5/minute; the 6th call in a
+    window returns 429."""
+    client.cookies.clear()
+    conn, cur = mock_db
+    cur.fetchone.return_value = None
+
+    from routers.auth import limiter as auth_limiter
+    auth_limiter.enabled = True
+    try:
+        with patch("routers.auth.send_approval_email"):
+            for i in range(5):
+                payload = {
+                    "userId": f"EMPRL{i}",
+                    "fullName": "Rate Limit Test",
+                    "email": "ratelimit@company.com",
+                    "password": "password123",
+                }
+                r = client.post("/api/auth/register", json=payload)
+                assert r.status_code == 200
+            r = client.post("/api/auth/register", json=payload)
+            assert r.status_code == 429
+    finally:
+        auth_limiter.enabled = False
+
+
 # ── Approval Tests ────────────────────────────────────────────────────────────
 
 def test_approve_user_success(client, mock_db, admin_cookies):
@@ -227,6 +253,25 @@ def test_approve_user_unauthorized(client):
     user_token = create_access_token({"sub": "EMP002", "name": "User", "role": "user"})
     response = client.get("/api/auth/approve/some_token", cookies={"dpa_token": user_token})
     assert response.status_code == 403
+
+
+def test_approve_user_rate_limited(client, mock_db, admin_cookies):
+    """GET /api/auth/approve/{token} is limited to 5/minute; the 6th call
+    in a window returns 429."""
+    conn, cur = mock_db
+    cur.fetchone.return_value = (True,)  # already-active short-circuits DB write path
+
+    from routers.auth import limiter as auth_limiter
+    auth_limiter.enabled = True
+    try:
+        with patch("routers.auth._ts.loads", return_value="EMP999"):
+            for _ in range(5):
+                r = client.get("/api/auth/approve/some_token", cookies=admin_cookies)
+                assert r.status_code == 200
+            r = client.get("/api/auth/approve/some_token", cookies=admin_cookies)
+            assert r.status_code == 429
+    finally:
+        auth_limiter.enabled = False
 
 
 # ── Logout Tests ──────────────────────────────────────────────────────────────

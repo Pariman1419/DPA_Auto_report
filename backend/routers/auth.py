@@ -158,7 +158,8 @@ def send_approval_email(user_id: str, full_name: str, email: str):
 
 
 @router.post("/register")
-def register(req: RegisterRequest):
+@limiter.limit("5/minute")
+def register(request: Request, req: RegisterRequest):
     conn = DBConnector.get_dpa_connection()
     if not conn:
         raise HTTPException(status_code=503, detail="Database unavailable")
@@ -182,7 +183,8 @@ def register(req: RegisterRequest):
 
 
 @router.get("/approve/{token}")
-def approve_user(token: str, _admin=Depends(require_admin)):
+@limiter.limit("5/minute")
+def approve_user(request: Request, token: str, _admin=Depends(require_admin)):
     """Admin-only endpoint to activate a pending user account (token expires in 24h)."""
     try:
         user_id = _ts.loads(token, salt="user-approval", max_age=_APPROVAL_MAX_AGE)

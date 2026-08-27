@@ -303,3 +303,55 @@ def test_generate_report_success(client, auth_cookies, tmp_path):
             file_name="output_report.pptx",
             file_path=mock_out
         )
+
+
+def test_generate_report_rate_limited(client, auth_cookies, tmp_path):
+    """POST /api/generate-report is limited to 3/minute; the 4th call in a
+    window returns 429."""
+    gen_payload = {
+        "prNumber": "PR2024001",
+        "lot": "MTDQS0906.1",
+        "timepoint": "T0",
+        "userId": "EMP001",
+        "selectedSections": {"EXTERNAL": True},
+    }
+    mock_out = str(tmp_path / "output_report.pptx")
+    pathlib.Path(mock_out).touch()
+
+    with patch("routers.product_request.get_next_revision", return_value="A"), \
+         patch("routers.product_request.DPAReportGenerator") as mock_gen_cls, \
+         patch("routers.product_request.save_generation_history"):
+        mock_gen_inst = MagicMock()
+        mock_gen_inst.generate.return_value = (mock_out, {"metadata_found": True, "images_found": 0, "images_missing": 0})
+        mock_gen_cls.return_value = mock_gen_inst
+
+        from routers.product_request import limiter as pr_limiter
+        pr_limiter.enabled = True
+        try:
+            for _ in range(3):
+                r = client.post("/api/generate-report", json=gen_payload, cookies=auth_cookies)
+                assert r.status_code == 200
+            r = client.post("/api/generate-report", json=gen_payload, cookies=auth_cookies)
+            assert r.status_code == 429
+        finally:
+            pr_limiter.enabled = False
+
+
+def test_download_report_rate_limited(client, auth_cookies):
+    """GET /api/download-report is limited to 10/minute; the 11th call in a
+    window returns 429."""
+    dummy_report = pathlib.Path(OUTPUT_DIR) / "DPA_Report_ratelimit_test.pptx"
+    dummy_report.write_bytes(b"report data")
+
+    from routers.product_request import limiter as pr_limiter
+    pr_limiter.enabled = True
+    try:
+        for _ in range(10):
+            r = client.get(f"/api/download-report?path={dummy_report}", cookies=auth_cookies)
+            assert r.status_code == 200
+        r = client.get(f"/api/download-report?path={dummy_report}", cookies=auth_cookies)
+        assert r.status_code == 429
+    finally:
+        pr_limiter.enabled = False
+        if dummy_report.exists():
+            dummy_report.unlink()
