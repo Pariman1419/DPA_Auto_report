@@ -52,7 +52,15 @@ NAS (\\th1srnas6\FALab_DataSharing\...)
 7. Download รายงาน PPTX
 ```
 
-## 4. Image Categories (หมวดหมู่ภาพ)
+## 4. Observability (Distributed Tracing)
+
+ระบบ Backend มีการติดตั้ง OpenTelemetry สำหรับ distributed tracing โดย export ผ่าน OTLP ไปยัง collector ภายนอก (เช่น Jaeger)
+
+- **ทำอะไร:** เก็บ trace ของทุก request ที่เข้ามาที่ FastAPI backend เพื่อดู latency และ error แต่ละ endpoint รวมถึง pipeline การ generate รายงาน
+- **ทำไม:** เพิ่มความสามารถในการ debug และ monitor ประสิทธิภาพของระบบใน production ซึ่งไม่มี requirement เดิมครอบคลุมส่วนนี้ — เป็นการเพิ่มเติมที่ทีมยอมรับและบันทึกย้อนหลัง (เดิมถูกเพิ่มเข้ามาในโค้ดโดยไม่มีเอกสารรองรับ พบจาก code review วันที่ 2026-08-27)
+- **Infra dependency ใหม่:** Backend คาดหวังว่า Docker network ชื่อ `observability-net` (external) จะมีอยู่แล้วในสภาพแวดล้อมที่ deploy (เช่น OTEL collector หรือ Jaeger stack) — เป็น precondition ก่อน deploy เดียวกับ `DB_HOST` ที่ต้องมี PostgreSQL พร้อมใช้งาน การเริ่มระบบจะไม่ fail หาก network นี้ไม่มี (wrapped in try/except ที่ `backend/main.py`), แต่ tracing จะไม่ทำงาน
+
+## 5. Image Categories (หมวดหมู่ภาพ)
 
 | ลำดับ | Category | คำอธิบาย |
 |---|---|---|
@@ -64,7 +72,7 @@ NAS (\\th1srnas6\FALab_DataSharing\...)
 | 6 | C-R | Cross Section / SEM |
 | 7 | BS,WP,SP | Bond Ability (Ball Shear, Wire Pull, Stitch Pull) |
 
-## 5. โครงสร้าง Product Request (PR)
+## 6. โครงสร้าง Product Request (PR)
 
 ```
 PR Number (เช่น PR2024001)
@@ -78,12 +86,12 @@ PR Number (เช่น PR2024001)
         └── Bond Measurements (Ball Shear / Wire Pull / Stitch Pull)
 ```
 
-## 6. Timepoint Naming
+## 7. Timepoint Naming
 
 - Timepoints จาก DB อาจมี prefix `- ` นำหน้า เช่น `- T0` → ระบบ normalize ด้วย `LTRIM(timepoint, '- ')`
 - รูปแบบที่พบ: `T0`, `T168`, `T500`, `T1000`
 
-## 7. รายงาน PPTX
+## 8. รายงาน PPTX
 
 - ใช้ Template ที่กำหนด Placeholder ในรูปแบบ `{table.column}` เช่น `{background_info.customer_name}`
 - Placeholder พิเศษ: `{Image_records.CATEGORY_SEQ}` → แทนที่ด้วย Image จริง
@@ -91,7 +99,7 @@ PR Number (เช่น PR2024001)
 - Placeholder SEM: `{sem_records.magnification_UNIT_POINT}` → ค่า magnification
 - Slides ที่ไม่ถูกเลือก Section จะถูกลบออกจาก PPTX ก่อน Generate
 
-## 8. ข้อกำหนดความปลอดภัย
+## 9. ข้อกำหนดความปลอดภัย
 
 - ผู้ใช้ใหม่ต้องรอ Admin อนุมัติก่อน Login ได้
 - JWT เก็บใน `httpOnly` Cookie (ป้องกัน XSS)
@@ -99,7 +107,7 @@ PR Number (เช่น PR2024001)
 - File serving endpoints ต้อง validate path อยู่ภายใน allowed root
 - Rate limiting 5 req/min บน sensitive endpoints
 
-## 9. Path Translation (Image Paths)
+## 10. Path Translation (Image Paths)
 
 - Image paths ใน DB เก็บเป็น Windows path (เช่น `D:\Auto_detect\Result\...`)
 - ระบบแปลง path ด้วย `IMAGE_WIN_ROOT` → `IMAGE_MOUNT_ROOT` เพื่อรองรับ cross-environment
