@@ -4,8 +4,10 @@ load_dotenv()  # must run before any service module is imported
 import os
 import time
 import uvicorn
+from uuid import uuid4
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from jose import JWTError
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
@@ -16,6 +18,8 @@ _configure()  # init logging before routers import
 from routers.product_request import router as product_request_router
 from routers.auth import router as auth_router
 from routers.account_admin import router as account_admin_router
+from services.auth_service import decode_token
+from services import telemetry_service
 
 log = get_logger("main")
 
@@ -47,12 +51,53 @@ app.include_router(product_request_router)
 app.include_router(account_admin_router)
 
 
+_COOKIE_NAME = "dpa_token"
+
+
+def _extract_actor_user_id(request: Request):
+    """
+    Best-effort JWT decode for telemetry attribution: cookie first, then
+    Authorization: Bearer header, mirroring get_current_user's extraction
+    order (routers/auth.py). Never raises -- any missing/invalid token
+    simply yields None. This is observability, not an auth gate.
+    """
+    token = request.cookies.get(_COOKIE_NAME)
+    if not token:
+        auth_header = request.headers.get("authorization", "")
+        if auth_header.lower().startswith("bearer "):
+            token = auth_header[7:].strip()
+    if not token:
+        return None
+    try:
+        payload = decode_token(token)
+        return payload.get("sub")
+    except JWTError:
+        return None
+    except Exception:
+        return None
+
+
 @app.middleware("http")
 async def request_log_middleware(request: Request, call_next):
+    request.state.request_id = uuid4()
     start = time.perf_counter()
     response = await call_next(request)
     elapsed = (time.perf_counter() - start) * 1000
     log.info("%s %s  →  %s  (%.0fms)", request.method, request.url.path, response.status_code, elapsed)
+
+    if request.url.path != "/health":
+        route = request.scope.get("route")
+        route_path = route.path if route else request.url.path
+        actor_user_id = _extract_actor_user_id(request)
+        telemetry_service.record_request_telemetry(
+            request_id=request.state.request_id,
+            user_id=actor_user_id,
+            route=route_path,
+            method=request.method,
+            status_code=response.status_code,
+            duration_ms=elapsed,
+        )
+
     return response
 
 

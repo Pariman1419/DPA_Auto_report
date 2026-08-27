@@ -138,6 +138,25 @@ def mock_db(monkeypatch):
     return conn, cursor
 
 
+# ── 6b. Default-stub request telemetry for the `client` fixture ─────────────
+# request_log_middleware (backend/main.py) calls
+# services.telemetry_service.record_request_telemetry after every request
+# routed through the `client` fixture. Since mock_db hands out a single
+# shared mock connection, that extra post-response write would otherwise
+# inflate pre-existing tests' `conn.commit.call_count` assertions (which are
+# about the business logic under test, not telemetry). Stub it to a no-op by
+# default; tests/api/test_telemetry.py exercises the real function directly
+# and opts out of this stub.
+@pytest.fixture(autouse=True)
+def _default_stub_telemetry(request, monkeypatch):
+    if "test_telemetry.py" in str(request.node.fspath):
+        yield
+        return
+    from services import telemetry_service
+    monkeypatch.setattr(telemetry_service, "record_request_telemetry", lambda *a, **k: None)
+    yield
+
+
 # ── 7. Standard test-data fixtures ───────────────────────────────────────────
 SAMPLE_USER_ROW = {
     "user_id":         "EMP001",
