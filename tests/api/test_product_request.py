@@ -33,6 +33,36 @@ def test_get_history(client, auth_cookies, sample_history):
         assert response.json()[0]["pr_no"] == "PR2024001"
 
 
+def test_get_history_filters_out_other_users_records_for_non_admin(client, auth_cookies, sample_history):
+    """A non-admin caller (auth_cookies is EMP001) only sees their own records."""
+    own_record = dict(sample_history)
+    own_record["id"] = 1
+    own_record["user_id"] = "EMP001"
+    other_record = dict(sample_history)
+    other_record["id"] = 2
+    other_record["user_id"] = "EMP999"
+    with patch("routers.product_request.list_generation_history", return_value=[own_record, other_record]):
+        response = client.get("/api/history", cookies=auth_cookies)
+        assert response.status_code == 200
+        ids = [r["id"] for r in response.json()]
+        assert ids == [1]
+
+
+def test_get_history_admin_sees_all_records(client, admin_cookies, sample_history):
+    """An admin caller sees every user's records, unfiltered."""
+    own_record = dict(sample_history)
+    own_record["id"] = 1
+    own_record["user_id"] = "EMP001"
+    other_record = dict(sample_history)
+    other_record["id"] = 2
+    other_record["user_id"] = "EMP999"
+    with patch("routers.product_request.list_generation_history", return_value=[own_record, other_record]):
+        response = client.get("/api/history", cookies=admin_cookies)
+        assert response.status_code == 200
+        ids = sorted(r["id"] for r in response.json())
+        assert ids == [1, 2]
+
+
 def test_download_history_file_success(client, auth_cookies, sample_history, tmp_path):
     """Successfully download a history record's PPTX if it exists on disk."""
     dummy_file = tmp_path / "test_report.pptx"
@@ -65,6 +95,31 @@ def test_download_history_file_not_found_disk(client, auth_cookies, sample_histo
         response = client.get("/api/history/1/download", cookies=auth_cookies)
         assert response.status_code == 404
         assert response.json()["detail"] == "File not found on disk"
+
+
+def test_download_history_file_forbidden_non_owner_non_admin(client, auth_cookies, sample_history):
+    """Download endpoint returns 403 if the caller is neither admin nor the record's owner."""
+    other_users_record = dict(sample_history)
+    other_users_record["user_id"] = "EMP999"
+    with patch("routers.product_request.get_history_record", return_value=other_users_record):
+        response = client.get("/api/history/1/download", cookies=auth_cookies)
+        assert response.status_code == 403
+        assert response.json()["detail"] == "Insufficient permissions"
+
+
+def test_download_history_file_admin_on_others_record(client, admin_cookies, sample_history, tmp_path):
+    """Download endpoint succeeds for an admin caller, even on someone else's record."""
+    dummy_file = tmp_path / "test_report.pptx"
+    dummy_file.write_bytes(b"dummy pptx data")
+
+    other_users_record = dict(sample_history)
+    other_users_record["user_id"] = "EMP999"
+    other_users_record["file_path"] = str(dummy_file)
+
+    with patch("routers.product_request.get_history_record", return_value=other_users_record):
+        response = client.get("/api/history/1/download", cookies=admin_cookies)
+        assert response.status_code == 200
+        assert response.content == b"dummy pptx data"
 
 
 def test_delete_history_success_owner(client, auth_cookies, sample_history):

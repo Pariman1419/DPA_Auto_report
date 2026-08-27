@@ -249,7 +249,7 @@ All endpoints require authentication unless marked **[public]**
 
 ### GET /api/history
 ```json
-// Response 200
+// Response 200 — the caller's own records; an admin caller gets all records
 [
   {
     "id": 1,
@@ -271,6 +271,7 @@ All endpoints require authentication unless marked **[public]**
 Content-Type: application/vnd.openxmlformats-officedocument.presentationml.presentation
 Content-Disposition: attachment; filename="DPA_Report_..."
 
+// Error 403 — caller is neither the record's owner nor an admin
 // Error 404 — record not found or file missing on disk
 ```
 

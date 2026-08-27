@@ -33,15 +33,20 @@ def get_dashboard_stats(_user=Depends(get_current_user)):
 
 
 @router.get("/history")
-def get_history(_user=Depends(get_current_user)):
-    return list_generation_history()
+def get_history(user=Depends(get_current_user)):
+    records = list_generation_history()
+    if user.get("role") != "admin":
+        records = [r for r in records if r.get("user_id") == user.get("sub")]
+    return records
 
 
 @router.get("/history/{record_id}/download")
-def download_history_file(record_id: int, _user=Depends(get_current_user)):
+def download_history_file(record_id: int, user=Depends(get_current_user)):
     record = get_history_record(record_id)
     if not record:
         raise HTTPException(status_code=404, detail="Record not found")
+    if user.get("role") != "admin" and record.get("user_id") != user.get("sub"):
+        raise HTTPException(status_code=403, detail="Insufficient permissions")
     path = record.get("file_path", "")
     if not path or not os.path.exists(path):
         raise HTTPException(status_code=404, detail="File not found on disk")
