@@ -1,12 +1,17 @@
 import os
 import pathlib
+import subprocess
+import urllib.request
+import urllib.error
 
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Request
 from fastapi.responses import FileResponse
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 
 from services.product_request_service import (
     read_product_request, list_product_requests, list_timepoints,
-    list_timepoint_folders, get_generation_stats, list_lots,
+    list_timepoint_folders, get_generation_stats, list_lots, list_lots_registry,
     list_generation_history, get_history_record, delete_history_record,
     get_next_revision, save_generation_history, list_preview_images, list_preview_imc, list_preview_bond, list_preview_sem
 )
@@ -15,6 +20,7 @@ from services.report_generator import DPAReportGenerator, OUTPUT_DIR
 from routers.auth import get_current_user
 
 router = APIRouter(prefix="/api", tags=["Product Request"])
+limiter = Limiter(key_func=get_remote_address)
 
 
 @router.get("/stats")
@@ -90,6 +96,11 @@ def download_report(path: str, _user=Depends(get_current_user)):
 @router.get("/product-request/{pr_number}/lots", response_model=list[str])
 def get_product_request_lots(pr_number: str, _user=Depends(get_current_user)):
     return list_lots(pr_number)
+
+
+@router.get("/product-request/{pr_number}/lots-registry")
+def get_product_request_lots_registry(pr_number: str, _user=Depends(get_current_user)):
+    return list_lots_registry(pr_number)
 
 
 @router.get("/product-request/{pr_number}/timepoints", response_model=list[str])
@@ -204,3 +215,80 @@ def get_image(path: str, _user=Depends(get_current_user)):
     ext = requested.suffix.lower()
     media_type = "image/jpeg" if ext in [".jpg", ".jpeg"] else "image/png"
     return FileResponse(path=str(requested), media_type=media_type)
+
+
+@router.post("/trigger-pipeline")
+@limiter.limit("3/minute")
+def trigger_pipeline(request: Request, _user=Depends(get_current_user)):
+    """Trigger the auto-detect pipeline (System 1) to scan and process immediately."""
+    # 1. Try via HTTP API first
+    urls = [
+        os.getenv("PIPELINE_TRIGGER_URL"),
+        "http://localhost:9091/trigger",
+        "http://host.docker.internal:9091/trigger",
+    ]
+    urls = list(dict.fromkeys([u for u in urls if u]))
+    
+    triggered_via_http = False
+    http_error_msg = ""
+    for url in urls:
+        try:
+            req = urllib.request.Request(url, data=b'')
+            with urllib.request.urlopen(req, timeout=3.0) as response:
+                if response.status == 200:
+                    triggered_via_http = True
+                    from logger import get_logger as _gl
+                    _gl("product_request").info(f"Pipeline successfully triggered via HTTP URL: {url}")
+                    break
+        except Exception as e:
+            http_error_msg = str(e)
+            
+    if triggered_via_http:
+        return {"status": "success", "message": "Pipeline triggered successfully via HTTP API"}
+
+    # 2. Try via docker CLI commands as fallbacks
+    from logger import get_logger as _gl
+    _log = _gl("product_request")
+    _log.warning(f"Failed to trigger pipeline via HTTP URLs (last error: {http_error_msg}). Trying local Docker CLI fallback...")
+    
+    try:
+        # Try docker restart first
+        res = subprocess.run(["docker", "restart", "auto_detect-pipeline-1"], capture_output=True, text=True, timeout=10.0)
+        if res.returncode == 0:
+            _log.info("Pipeline container auto_detect-pipeline-1 restarted successfully")
+            return {"status": "success", "message": "Pipeline triggered successfully via docker restart"}
+        else:
+            # Try docker-compose restart as second fallback
+            res2 = subprocess.run(["docker-compose", "-f", r"D:\Auto_detect\docker-compose.yml", "restart", "pipeline"], capture_output=True, text=True, timeout=15.0)
+            if res2.returncode == 0:
+                _log.info("Pipeline restarted successfully via docker-compose restart")
+                return {"status": "success", "message": "Pipeline triggered successfully via docker-compose restart"}
+            else:
+                raise Exception(f"docker restart failed: {res.stderr}; docker-compose restart failed: {res2.stderr}")
+    except Exception as e:
+        _log.error(f"Failed to trigger pipeline via Docker CLI fallback: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to trigger pipeline. Error: {str(e)}"
+        )
+
+
+@router.get("/pipeline-status")
+def pipeline_status(_user=Depends(get_current_user)):
+    """Proxy the auto-detect watcher's run state (busy / cycle_count) so the UI
+    overlay can wait until a triggered cycle actually finishes."""
+    urls = [
+        os.getenv("PIPELINE_STATUS_URL"),
+        "http://localhost:9091/status",
+        "http://host.docker.internal:9091/status",
+    ]
+    urls = list(dict.fromkeys([u for u in urls if u]))
+    for url in urls:
+        try:
+            with urllib.request.urlopen(url, timeout=3.0) as response:
+                if response.status == 200:
+                    import json as _json
+                    return _json.loads(response.read().decode())
+        except Exception:
+            continue
+    raise HTTPException(status_code=503, detail="Pipeline status unavailable")
