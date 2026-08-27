@@ -63,6 +63,8 @@ Optional but important:
 | `PIPELINE_COMPOSE_PATH` | `D:\Auto_detect\docker-compose.yml` | docker-compose file used as a fallback to restart the Auto_detect pipeline when HTTP trigger URLs fail |
 | `PIPELINE_TRIGGER_URL` | `http://localhost:9091/trigger` | HTTP URL for the auto-detect pipeline trigger endpoint (overrides default; tried before docker fallbacks) |
 | `PIPELINE_STATUS_URL` | `http://localhost:9091/status` | HTTP URL for the auto-detect pipeline status endpoint (returns busy/cycle_count) |
+| `ENABLE_PIPELINE_DOCKER_FALLBACK` | `false` | Must be exactly `"true"` (case-insensitive/whitespace-tolerant) to allow `POST /api/trigger-pipeline` to fall back to shelling out to the Docker CLI when the HTTP trigger is unreachable. Disabled by default so production never runs that privileged fallback; failures instead return a sanitized 502 with a request ID |
+| `APP_GIT_SHA` | `unknown` | Baked into the backend/frontend images at build time via the `APP_GIT_SHA` Docker build arg (set from the `GIT_SHA` env var passed to `docker compose build` — see `docker-compose.yml`). Surfaced by `GET /health` as `gitSha`, but only to callers with a valid admin JWT |
 | `ALLOWED_ORIGINS` | `http://localhost:3000` | Comma-separated CORS origins |
 | `COOKIE_SECURE` | `false` | Set `true` in HTTPS production |
 | `SMTP_HOST`, `SMTP_PORT`, `APPROVER_EMAIL`, `SENDER_EMAIL`, `BASE_URL` | — | Email for user approval workflow |

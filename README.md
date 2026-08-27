@@ -103,13 +103,49 @@ Vite proxies `/api/*` → `http://localhost:9090`, so run both during developmen
 
 ### 3. Docker (optional)
 ```powershell
-docker-compose up --build
+# Build with the current commit baked in as APP_GIT_SHA (surfaced by /health to admins —
+# see below). Without GIT_SHA exported, images build fine but APP_GIT_SHA falls back to "unknown".
+$env:GIT_SHA = git rev-parse --short HEAD
+docker compose build backend frontend
+docker compose up -d
 ```
 
 ## ⚙️ Configuration
 
 All backend config lives in `backend/.env` (see `backend/.env.example`). Variables that cause
 startup to abort if missing: `DB_HOST`, `DB_USER`, `DB_PASSWORD`, `JWT_SECRET_KEY`.
+
+`ENABLE_PIPELINE_DOCKER_FALLBACK` (default unset/`false`) gates whether
+`POST /api/trigger-pipeline` may fall back to shelling out to the Docker CLI
+(`docker restart` / `docker-compose restart`) when the HTTP trigger to the
+Auto_detect watcher is unreachable. That fallback shells out from the API
+process with host Docker access, so it's opt-in only — set it to exactly
+`"true"` (case-insensitive, whitespace-tolerant) for local/dev use. In
+production it stays disabled: an unreachable watcher returns a sanitized
+`502` with a request ID instead of attempting the Docker fallback; full
+error detail (paths, container names, subprocess stderr) is logged
+server-side only, correlated to the client by that request ID.
+
+`GET /health` is public and always returns `{"status": "ok"}` with no DB
+call. If the caller presents a valid JWT (cookie or `Authorization: Bearer`)
+for a user with `role == "admin"`, the response also includes
+`"gitSha": "<APP_GIT_SHA or 'unknown'>"` — decoded straight from the token,
+no DB round-trip. A missing/invalid/expired token never causes an error; it
+just means `gitSha` is omitted, so the endpoint stays safe for load
+balancers and uptime probes while still letting admins confirm which build
+is deployed.
+
+**Rebuild procedure:** export `GIT_SHA` (e.g. `$env:GIT_SHA = git rev-parse
+--short HEAD` in PowerShell, or `export GIT_SHA=$(git rev-parse --short
+HEAD)` in bash) before building, so the images are tagged with a real
+revision instead of falling back to `APP_GIT_SHA=unknown`. Then:
+```powershell
+docker compose build backend frontend
+docker compose up -d
+```
+`docker compose config --quiet` can validate the compose file's syntax and
+`.env` interpolation without building or starting anything — useful as a
+pre-flight check before either command above.
 
 `AUDIT_LOG_ROOT` (default `D:\Auto_detect\logs\dpa-account-audit`) sets where the account-admin
 audit trail is mirrored as sanitized JSONL (`{YYYY-MM-DD}.jsonl`, one object per line), in

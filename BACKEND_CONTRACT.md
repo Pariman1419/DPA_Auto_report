@@ -290,12 +290,26 @@ not a best-effort telemetry write.
 // Response 200
 { "status": "success", "message": "Pipeline triggered successfully via HTTP API" }
 
-// Also supports:
+// Also supports (only reachable when ENABLE_PIPELINE_DOCKER_FALLBACK=true, see below):
 // { "status": "success", "message": "Pipeline triggered successfully via docker restart" }
 // { "status": "success", "message": "Pipeline triggered successfully via docker-compose restart" }
 
-// Error 500 — all trigger methods failed
+// Error 502 — HTTP trigger unreachable and the Docker CLI fallback is disabled
+//              (the production default). Body is sanitized: a generic message plus
+//              a request ID for correlating to server-side logs — no stderr, paths,
+//              or container names are ever returned to the client.
+{ "detail": "Pipeline trigger failed (request <request_id>)" }
+
+// Error 500 — Docker CLI fallback is enabled but all trigger methods failed
 ```
+The HTTP trigger to the Auto_detect watcher (`PIPELINE_TRIGGER_URL` /
+`http://localhost:9091/trigger` / `http://host.docker.internal:9091/trigger`)
+is tried first and is the only path used in production. If it's unreachable,
+a local Docker CLI fallback (shelling out to `docker restart` /
+`docker-compose restart` from the API process — a privileged operation) only
+runs when the server has `ENABLE_PIPELINE_DOCKER_FALLBACK` set to exactly
+`"true"` (case-insensitive, whitespace-tolerant); it is unset/`false` by
+default, so production deployments never shell out from the API process.
 
 ### GET /api/pipeline-status
 ```json
@@ -389,8 +403,19 @@ Content-Disposition: attachment; filename="DPA_Report_..."
 
 ### GET /health
 ```json
+// Response 200 — no auth, no DB call
 { "status": "ok" }
+
+// Response 200 — caller presents a valid JWT (cookie or Authorization: Bearer)
+// with role == "admin" (decoded from the token only, no DB round-trip)
+{ "status": "ok", "gitSha": "b79206a" }
 ```
+`gitSha` echoes the `APP_GIT_SHA` env var baked into the image at build time
+(see `docker-compose.yml`'s `APP_GIT_SHA: ${GIT_SHA:-unknown}` build arg);
+it's `"unknown"` if the image was built without `GIT_SHA` exported. A
+missing/invalid/expired token is never an error here — it just omits
+`gitSha` — so the endpoint stays safe to hit from load balancers and uptime
+probes with no auth at all.
 
 ---
 
