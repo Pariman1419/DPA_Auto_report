@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager
 from uuid import uuid4
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from jose import JWTError
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
@@ -102,26 +103,59 @@ def _extract_telemetry_identity(request: Request):
         return None, None
 
 
+def _record_telemetry(request: Request, safe_path: str, status_code: int, elapsed: float) -> None:
+    """Shared telemetry-recording step for both the success and exception
+    paths of request_log_middleware. Skips /health (never had telemetry).
+    telemetry_service.record_request_telemetry is itself fail-open, so no
+    try/except is needed here."""
+    if request.url.path == "/health":
+        return
+    actor_user_id, session_id = _extract_telemetry_identity(request)
+    telemetry_service.record_request_telemetry(
+        request_id=request.state.request_id,
+        user_id=actor_user_id,
+        session_id=session_id,
+        route=safe_path,
+        method=request.method,
+        status_code=status_code,
+        duration_ms=elapsed,
+    )
+
+
 @app.middleware("http")
 async def request_log_middleware(request: Request, call_next):
     request.state.request_id = uuid4()
     start = time.perf_counter()
-    response = await call_next(request)
+    try:
+        response = await call_next(request)
+    except Exception:
+        # An unhandled exception in a route handler raises past call_next
+        # instead of yielding a Response. Without this except block, the
+        # exception would propagate past the log line and telemetry call
+        # below (and past this whole middleware function) straight to
+        # Starlette's ServerErrorMiddleware, so this request would never be
+        # logged or recorded -- see PH-08. _safe_request_path() is used here
+        # too so the reset-password path stays templated on the failure path
+        # as well as the success path -- see PH-09.
+        elapsed = (time.perf_counter() - start) * 1000
+        safe_path = _safe_request_path(request)
+        log.exception(
+            "%s %s  →  500 (unhandled exception)  (%.0fms) request_id=%s",
+            request.method, safe_path, elapsed, request.state.request_id,
+        )
+        _record_telemetry(request, safe_path, 500, elapsed)
+        return JSONResponse(
+            status_code=500,
+            content={
+                "detail": "Internal server error",
+                "request_id": str(request.state.request_id),
+            },
+        )
+
     elapsed = (time.perf_counter() - start) * 1000
     safe_path = _safe_request_path(request)
     log.info("%s %s  →  %s  (%.0fms)", request.method, safe_path, response.status_code, elapsed)
-
-    if request.url.path != "/health":
-        actor_user_id, session_id = _extract_telemetry_identity(request)
-        telemetry_service.record_request_telemetry(
-            request_id=request.state.request_id,
-            user_id=actor_user_id,
-            session_id=session_id,
-            route=safe_path,
-            method=request.method,
-            status_code=response.status_code,
-            duration_ms=elapsed,
-        )
+    _record_telemetry(request, safe_path, response.status_code, elapsed)
 
     return response
 

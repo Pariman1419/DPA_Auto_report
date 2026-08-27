@@ -12,6 +12,25 @@ unit tests for telemetry_service itself.
 from unittest.mock import patch
 
 import pytest
+from fastapi import APIRouter
+
+
+# ── Test-only route that always raises an unhandled exception ───────────────
+# Registered once (module-scoped, autouse) on the shared session-scoped `app`
+# fixture so PH-08 has something to hit that reaches request_log_middleware's
+# except branch -- no production route deliberately raises an unhandled
+# exception, so we need a dedicated one. The path is namespaced/unique enough
+# to never collide with a real route or another test.
+@pytest.fixture(scope="module", autouse=True)
+def _raising_route(app):
+    router = APIRouter()
+
+    @router.get("/api/__test__/boom")
+    def boom():
+        raise RuntimeError("boom - unhandled test exception")
+
+    app.include_router(router)
+    yield
 
 
 @pytest.mark.api
@@ -102,3 +121,58 @@ def test_reset_token_is_not_written_to_request_logs_or_telemetry(client, mock_db
     _, telemetry = mock_record.call_args
     assert raw_token not in telemetry["route"]
     assert all(raw_token not in str(call) for call in mock_log.call_args_list)
+
+
+# ── PH-08: unhandled exceptions must not swallow logging/telemetry ─────────
+@pytest.mark.api
+def test_unhandled_exception_returns_sanitized_500_with_request_id(client, mock_db):
+    """
+    A route that raises an unhandled exception must still yield a 500
+    response containing the request id (not the raw exception message/
+    traceback), and telemetry must be recorded once with status 500 and the
+    templated route.
+    """
+    with patch("services.telemetry_service.record_request_telemetry") as mock_record:
+        resp = client.get("/api/__test__/boom")
+
+    assert resp.status_code == 500
+    body = resp.json()
+    assert "boom" not in str(body).lower()
+    # Some request-id-bearing field must be present in the sanitized body.
+    request_id_value = body.get("request_id") or body.get("requestId")
+    assert request_id_value, f"expected a request id in error body, got {body}"
+
+    assert mock_record.call_count == 1
+    _, kwargs = mock_record.call_args
+    assert kwargs["route"] == "/api/__test__/boom"
+    assert kwargs["method"] == "GET"
+    assert kwargs["status_code"] == 500
+    assert isinstance(kwargs["duration_ms"], (int, float))
+    assert kwargs["duration_ms"] >= 0
+
+
+# ── PH-09: the reset-password path must stay redacted through the exception
+#    path too, not just the success path. ───────────────────────────────────
+@pytest.mark.api
+def test_unhandled_exception_on_reset_password_keeps_token_redacted(client, mock_db):
+    raw_token = "raw-secret"
+    with patch("services.telemetry_service.record_request_telemetry") as mock_record, \
+         patch("main.log.exception") as mock_log_exc, \
+         patch("routers.auth.DBConnector.get_dpa_connection", side_effect=RuntimeError("db exploded")):
+        resp = client.post(
+            f"/api/auth/reset-password/{raw_token}",
+            json={"password": "NewPassw0rd!"},
+        )
+
+    assert resp.status_code == 500
+    assert raw_token not in resp.text
+
+    assert mock_record.call_count == 1
+    _, kwargs = mock_record.call_args
+    assert kwargs["route"] == "/api/auth/reset-password/{token}"
+    assert kwargs["status_code"] == 500
+    assert raw_token not in kwargs["route"]
+
+    assert mock_log_exc.called
+    logged = " ".join(str(call) for call in mock_log_exc.call_args_list)
+    assert raw_token not in logged
