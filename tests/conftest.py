@@ -49,6 +49,8 @@ def app():
         _app.state.limiter.enabled = False
     from routers.auth import limiter as auth_limiter
     auth_limiter.enabled = False
+    from routers.product_request import limiter as pr_limiter
+    pr_limiter.enabled = False
     return _app
 
 
