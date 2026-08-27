@@ -33,6 +33,7 @@ log = get_logger("telemetry_service")
 def record_request_telemetry(
     request_id=None,
     user_id: Optional[str] = None,
+    session_id=None,
     route: str = "",
     method: Optional[str] = None,
     status_code: Optional[int] = None,
@@ -56,10 +57,10 @@ def record_request_telemetry(
                 cur.execute(
                     """
                     INSERT INTO request_telemetry
-                        (user_id, route, method, status_code, duration_ms)
-                    VALUES (%s, %s, %s, %s, %s)
+                        (user_id, request_id, session_id, route, method, status_code, duration_ms)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
                     """,
-                    (user_id, route, method, status_code, duration_ms),
+                    (user_id, request_id, session_id, route, method, status_code, duration_ms),
                 )
             conn.commit()
         finally:

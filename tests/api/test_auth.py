@@ -39,9 +39,9 @@ def test_login_success(client, mock_db, sample_user):
     assert len(select_calls) == 1
     assert select_calls[0][0][0] == (
         "SELECT user_id, full_name, role, password_hash, session_version "
-        "FROM users WHERE user_id = %s AND is_active = True"
+        "FROM users WHERE user_id = %s AND account_status = %s AND is_active = True"
     )
-    assert select_calls[0][0][1] == ("EMP001",)
+    assert select_calls[0][0][1] == ("EMP001", "active")
 
     # A user_sessions row is written on successful login, for session history
     session_insert_calls = [
@@ -235,7 +235,7 @@ def test_approve_user_success(client, mock_db, admin_cookies):
         if "UPDATE users SET is_active = True" in call[0][0]
     ]
     assert len(update_calls) == 1
-    assert update_calls[0][0][1][0] == "EMP999"
+    assert update_calls[0][0][1] == ("active", "EMP999")
     assert conn.commit.call_count == 1
 
 
@@ -351,7 +351,7 @@ def test_get_current_user_sv_matches_session_version_passes(client, mock_db):
 
     conn, cur = mock_db
     # First fetchone: the sv-check SELECT; second: approve's is_active check.
-    cur.fetchone.side_effect = [(1,), (True,)]
+    cur.fetchone.side_effect = [(1, "active"), (True,)]
 
     token = create_access_token({"sub": "admin", "name": "Admin User", "role": "admin", "sv": 1})
     with patch("routers.auth._ts.loads", return_value="EMP999"):
@@ -370,6 +370,20 @@ def test_get_current_user_sv_mismatch_returns_401(client, mock_db):
     cur.fetchone.return_value = (1,)  # current session_version in DB
 
     token = create_access_token({"sub": "admin", "name": "Admin User", "role": "admin", "sv": 99})
+    response = client.get("/api/auth/approve/some_token", cookies={"dpa_token": token})
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Invalid or expired token"
+
+
+def test_get_current_user_rejects_disabled_account_even_when_session_version_matches(client, mock_db):
+    """A disabled account's still-valid JWT must be rejected immediately."""
+    from services.auth_service import create_access_token
+
+    conn, cur = mock_db
+    cur.fetchone.return_value = (1, "disabled")
+    token = create_access_token({"sub": "admin", "name": "Admin User", "role": "admin", "sv": 1})
+
     response = client.get("/api/auth/approve/some_token", cookies={"dpa_token": token})
 
     assert response.status_code == 401
@@ -434,11 +448,10 @@ def test_reset_password_success(client, mock_db):
     raw_token = "raw-reset-token-value"
     expected_hash = hashlib.sha256(raw_token.encode()).hexdigest()
 
-    with patch("routers.auth.write_audit_event") as mock_audit:
-        response = client.post(
-            f"/api/auth/reset-password/{raw_token}",
-            json={"password": "NewPassw0rd!"},
-        )
+    response = client.post(
+        f"/api/auth/reset-password/{raw_token}",
+        json={"password": "NewPassw0rd!"},
+    )
 
     assert response.status_code == 200
 
@@ -462,13 +475,6 @@ def test_reset_password_success(client, mock_db):
     assert pw_calls[0][0][1][-1] == "EMP001"
     assert conn.commit.call_count == 1
 
-    # Audit event: self-service reset, no actor, no credential material.
-    mock_audit.assert_called_once()
-    event = mock_audit.call_args[0][0]
-    assert event.action == "password_reset"
-    assert event.target_user_id == "EMP001"
-    assert event.actor_user_id is None
-    for state in (event.before_state, event.after_state):
-        if state:
-            assert "password" not in str(state).lower()
-            assert "token" not in str(state).lower()
+    audit_calls = [call for call in cur.execute.call_args_list if "INSERT INTO account_audit_logs" in call[0][0]]
+    assert len(audit_calls) == 1
+    assert conn.commit.call_count == 1

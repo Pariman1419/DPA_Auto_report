@@ -71,6 +71,23 @@ def _json_state(state: Optional[dict]) -> Optional[Json]:
     return Json(state, dumps=lambda obj: json.dumps(obj, default=str))
 
 
+def insert_audit_event(cur, event: AuditEvent):
+    """Insert an audit row using the caller's transaction."""
+    cur.execute(
+        """
+        INSERT INTO account_audit_logs
+            (actor_user_id, target_user_id, action, before_state, after_state, occurred_at)
+        VALUES (%s, %s, %s, %s, %s, %s)
+        RETURNING id
+        """,
+        (event.actor_user_id, event.target_user_id, event.action,
+         _json_state(_sanitize_state(event.before_state)),
+         _json_state(_sanitize_state(event.after_state)), event.occurred_at),
+    )
+    row = cur.fetchone()
+    return row[0] if row else None
+
+
 def write_audit_event(event: AuditEvent):
     """
     Insert one row into account_audit_logs, then mirror a sanitized copy to
@@ -84,24 +101,7 @@ def write_audit_event(event: AuditEvent):
     audit_id = None
     try:
         with conn.cursor() as cur:
-            cur.execute(
-                """
-                INSERT INTO account_audit_logs
-                    (actor_user_id, target_user_id, action, before_state, after_state, occurred_at)
-                VALUES (%s, %s, %s, %s, %s, %s)
-                RETURNING id
-                """,
-                (
-                    event.actor_user_id,
-                    event.target_user_id,
-                    event.action,
-                    _json_state(before),
-                    _json_state(after),
-                    event.occurred_at,
-                ),
-            )
-            row = cur.fetchone()
-            audit_id = row[0] if row else None
+            audit_id = insert_audit_event(cur, event)
         conn.commit()
     finally:
         DBConnector.release_dpa_connection(conn)

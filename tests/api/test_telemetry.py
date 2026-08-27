@@ -89,3 +89,16 @@ def test_telemetry_write_failure_does_not_change_response(client, admin_headers,
         resp = client.get("/api/stats", headers=admin_headers)
 
     assert resp.status_code == 200
+
+
+@pytest.mark.api
+def test_reset_token_is_not_written_to_request_logs_or_telemetry(client, mock_db):
+    """The reset secret must never escape into middleware observability."""
+    raw_token = "secret-reset-token"
+    with patch("services.telemetry_service.record_request_telemetry") as mock_record, \
+         patch("main.log.info") as mock_log:
+        client.post(f"/api/auth/reset-password/{raw_token}", json={"password": "NewPassw0rd!"})
+
+    _, telemetry = mock_record.call_args
+    assert raw_token not in telemetry["route"]
+    assert all(raw_token not in str(call) for call in mock_log.call_args_list)

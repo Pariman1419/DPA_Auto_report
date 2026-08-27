@@ -14,13 +14,14 @@ to proceed without the minimum data it needs to act safely.
 import hashlib
 import os
 import secrets
+import base64
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from psycopg2.extras import RealDictCursor
 
 from services.db_connector import DBConnector
-from services.audit_service import AuditEvent, write_audit_event, mirror_event, _sanitize_state, _json_state
+from services.audit_service import AuditEvent, write_audit_event, mirror_event, _sanitize_state, _json_state, insert_audit_event
 from logger import get_logger
 
 log = get_logger("account_admin_service")
@@ -120,22 +121,21 @@ def change_status(actor_user_id: Optional[str], target_user_id: str, new_status:
 
             is_active = new_status == "active"
             cur.execute(
-                "UPDATE users SET account_status = %s, is_active = %s WHERE user_id = %s",
+                "UPDATE users SET account_status = %s, is_active = %s, "
+                "session_version = session_version + 1 WHERE user_id = %s",
                 (new_status, is_active, target_user_id),
             )
+            event = AuditEvent(
+                actor_user_id=actor_user_id, target_user_id=target_user_id,
+                action="change_status", before_state=dict(before),
+                after_state={"account_status": new_status, "is_active": is_active},
+            )
+            insert_audit_event(cur, event)
         conn.commit()
     finally:
         DBConnector.release_dpa_connection(conn)
 
-    write_audit_event(
-        AuditEvent(
-            actor_user_id=actor_user_id,
-            target_user_id=target_user_id,
-            action="change_status",
-            before_state=dict(before),
-            after_state={"account_status": new_status, "is_active": is_active},
-        )
-    )
+    mirror_event(event)
 
     return {"user_id": target_user_id, "account_status": new_status, "is_active": is_active}
 
@@ -159,6 +159,12 @@ def create_reset_link(actor_user_id: Optional[str], target_user_id: str) -> str:
             if not row:
                 raise ValueError(f"user not found: {target_user_id}")
 
+            cur.execute(
+                "UPDATE password_reset_tokens SET revoked_at = now() "
+                "WHERE user_id = %s AND used_at IS NULL AND revoked_at IS NULL",
+                (target_user_id,),
+            )
+
             token = secrets.token_urlsafe(32)
             token_hash = hashlib.sha256(token.encode()).hexdigest()
             expires_at = datetime.now(timezone.utc) + timedelta(minutes=RESET_TOKEN_TTL_MINUTES)
@@ -170,6 +176,12 @@ def create_reset_link(actor_user_id: Optional[str], target_user_id: str) -> str:
                 """,
                 (target_user_id, token_hash, expires_at),
             )
+            event = AuditEvent(
+                actor_user_id=actor_user_id, target_user_id=target_user_id,
+                action="create_reset_link", before_state=None,
+                after_state={"expires_at": expires_at.isoformat()},
+            )
+            insert_audit_event(cur, event)
         conn.commit()
     finally:
         DBConnector.release_dpa_connection(conn)
@@ -179,15 +191,7 @@ def create_reset_link(actor_user_id: Optional[str], target_user_id: str) -> str:
     base_url = os.getenv("BASE_URL", "http://localhost:9090")
     reset_url = f"{base_url.rstrip('/')}/reset-password/{token}"
 
-    write_audit_event(
-        AuditEvent(
-            actor_user_id=actor_user_id,
-            target_user_id=target_user_id,
-            action="create_reset_link",
-            before_state=None,
-            after_state={"expires_at": expires_at.isoformat()},
-        )
-    )
+    mirror_event(event)
 
     return reset_url
 
@@ -331,8 +335,12 @@ def activity(target_user_id: str, limit: int = 50, cursor: Optional[str] = None)
     clauses = ["target_user_id = %s"]
     params: list = [target_user_id]
     if cursor:
-        clauses.append("occurred_at < %s")
-        params.append(cursor)
+        try:
+            occurred_at, row_id = base64.urlsafe_b64decode(cursor.encode()).decode().rsplit("|", 1)
+            clauses.append("(occurred_at, id) < (%s, %s)")
+            params.extend([occurred_at, int(row_id)])
+        except (ValueError, UnicodeDecodeError):
+            raise ValueError("invalid activity cursor")
     params.append(page_size + 1)
 
     conn = DBConnector.get_dpa_connection()
@@ -356,7 +364,10 @@ def activity(target_user_id: str, limit: int = 50, cursor: Optional[str] = None)
     next_cursor = None
     if len(rows) > page_size:
         rows = rows[:page_size]
-        next_cursor = rows[-1]["occurred_at"]
+        last = rows[-1]
+        next_cursor = base64.urlsafe_b64encode(
+            f"{last['occurred_at'].isoformat()}|{last['id']}".encode()
+        ).decode()
 
     return {"items": rows, "next_cursor": next_cursor}
 
@@ -377,6 +388,13 @@ def performance(
     (start inclusive, end exclusive) to stay index-aligned with
     (user_id, occurred_at DESC).
     """
+    if start is None:
+        start = datetime.now(timezone.utc) - timedelta(days=30)
+    if end is None:
+        end = datetime.now(timezone.utc)
+    if end <= start:
+        raise ValueError("end must be after start")
+
     clauses = ["user_id = %s"]
     params: list = [target_user_id]
     if start:

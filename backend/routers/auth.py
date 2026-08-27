@@ -4,6 +4,7 @@ import smtplib
 from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
 from typing import Optional
+from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException, Depends, Request, Response
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -19,7 +20,7 @@ from services.auth_service import (
     ACCESS_TOKEN_EXPIRE_HOURS, SECRET_KEY,
 )
 from services.db_connector import DBConnector
-from services.audit_service import AuditEvent, write_audit_event
+from services.audit_service import AuditEvent, write_audit_event, insert_audit_event, mirror_event
 from models.schemas import LoginRequest, RegisterRequest, TokenResponse, ResetPasswordRequest
 from logger import get_logger
 
@@ -75,12 +76,16 @@ def get_current_user(
         try:
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT session_version FROM users WHERE user_id = %s",
+                    "SELECT session_version, account_status FROM users WHERE user_id = %s",
                     (payload.get("sub"),),
                 )
                 row = cur.fetchone()
-            if not row or row[0] != sv:
+            if not row or row[0] != sv or row[1] != "active":
                 raise HTTPException(status_code=401, detail="Invalid or expired token")
+            session_id = payload.get("sid")
+            if session_id:
+                cur.execute("UPDATE user_sessions SET last_seen_at = now() WHERE session_id = %s", (session_id,))
+                conn.commit()
         finally:
             DBConnector.release_dpa_connection(conn)
 
@@ -109,8 +114,8 @@ def login(request: Request, req: LoginRequest, response: Response):
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(
                 "SELECT user_id, full_name, role, password_hash, session_version "
-                "FROM users WHERE user_id = %s AND is_active = True",
-                (req.userId,),
+                "FROM users WHERE user_id = %s AND account_status = %s AND is_active = True",
+                (req.userId, "active"),
             )
             user = cur.fetchone()
 
@@ -127,12 +132,14 @@ def login(request: Request, req: LoginRequest, response: Response):
             conn.commit()
 
         session_expires_at = datetime.now(timezone.utc) + timedelta(hours=ACCESS_TOKEN_EXPIRE_HOURS)
+        session_id = uuid4()
         with conn.cursor() as cur:
             cur.execute(
-                "INSERT INTO user_sessions (user_id, ip_address, user_agent, expires_at) "
-                "VALUES (%s, %s, %s, %s)",
+                "INSERT INTO user_sessions (user_id, session_id, ip_address, user_agent, expires_at, last_seen_at) "
+                "VALUES (%s, %s, %s, %s, %s, now())",
                 (
                     user["user_id"],
+                    session_id,
                     request.client.host if request.client else None,
                     request.headers.get("user-agent"),
                     session_expires_at,
@@ -145,6 +152,7 @@ def login(request: Request, req: LoginRequest, response: Response):
             "name": user["full_name"],
             "role": user["role"],
             "sv":   user["session_version"],
+            "sid":  str(session_id),
         })
 
         response.set_cookie(
@@ -167,8 +175,23 @@ def login(request: Request, req: LoginRequest, response: Response):
 
 
 @router.post("/logout")
-def logout(response: Response):
+def logout(request: Request, response: Response):
     """Clear the auth cookie."""
+    token = request.cookies.get(_COOKIE_NAME)
+    if token:
+        try:
+            session_id = decode_token(token).get("sid")
+            if session_id:
+                conn = DBConnector.get_dpa_connection()
+                if conn:
+                    try:
+                        with conn.cursor() as cur:
+                            cur.execute("UPDATE user_sessions SET logged_out_at = now() WHERE session_id = %s", (session_id,))
+                        conn.commit()
+                    finally:
+                        DBConnector.release_dpa_connection(conn)
+        except Exception:
+            log.warning("Failed to record logout session state")
     response.delete_cookie(key=_COOKIE_NAME, path="/")
     return {"status": "ok"}
 
@@ -216,9 +239,9 @@ def register(request: Request, req: RegisterRequest):
                 raise HTTPException(status_code=409, detail="Employee ID already registered")
 
             cur.execute(
-                "INSERT INTO users (user_id, full_name, email, role, password_hash, is_active) "
-                "VALUES (%s, %s, %s, %s, %s, False)",
-                (req.userId, req.fullName, req.email or None, "user", hash_password(req.password)),
+                "INSERT INTO users (user_id, full_name, email, role, password_hash, is_active, account_status) "
+                "VALUES (%s, %s, %s, %s, %s, False, %s)",
+                (req.userId, req.fullName, req.email or None, "user", hash_password(req.password), "pending"),
             )
         conn.commit()
 
@@ -251,7 +274,7 @@ def approve_user(request: Request, token: str, _admin=Depends(require_admin)):
             if user[0]:
                 return {"message": f"User {user_id} is already active."}
 
-            cur.execute("UPDATE users SET is_active = True WHERE user_id = %s", (user_id,))
+            cur.execute("UPDATE users SET is_active = True, account_status = %s WHERE user_id = %s", ("active", user_id))
         conn.commit()
         log.info("User %s approved by admin", user_id)
         return {"message": f"User {user_id} has been approved and activated."}
@@ -288,7 +311,7 @@ def reset_password(request: Request, token: str, req: ResetPasswordRequest):
         with conn.cursor() as cur:
             cur.execute(
                 "UPDATE password_reset_tokens SET used_at = now() "
-                "WHERE token_hash = %s AND used_at IS NULL AND expires_at > now() "
+                "WHERE token_hash = %s AND used_at IS NULL AND revoked_at IS NULL AND expires_at > now() "
                 "RETURNING user_id",
                 (token_hash,),
             )
@@ -302,6 +325,11 @@ def reset_password(request: Request, token: str, req: ResetPasswordRequest):
                 "WHERE user_id = %s",
                 (hash_password(req.password), user_id),
             )
+            event = AuditEvent(
+                actor_user_id=None, target_user_id=user_id, action="password_reset",
+                before_state=None, after_state={"method": "reset_link"},
+            )
+            insert_audit_event(cur, event)
         conn.commit()
     except Exception:
         conn.rollback()
@@ -309,14 +337,6 @@ def reset_password(request: Request, token: str, req: ResetPasswordRequest):
     finally:
         DBConnector.release_dpa_connection(conn)
 
-    write_audit_event(
-        AuditEvent(
-            actor_user_id=None,
-            target_user_id=user_id,
-            action="password_reset",
-            before_state=None,
-            after_state={"method": "reset_link"},
-        )
-    )
+    mirror_event(event)
     log.info("Password reset via reset link for user %s", user_id)
     return {"status": "success", "message": "Password has been reset."}

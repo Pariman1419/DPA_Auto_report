@@ -11,7 +11,9 @@ HTTP-request context -- account_admin_service only knows what it's told.
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 
 from routers.auth import require_role
 from services import account_admin_service
@@ -23,6 +25,7 @@ log = get_logger("account_admin")
 router = APIRouter(prefix="/api/admin", tags=["Account Admin"])
 
 require_admin = require_role("admin")
+limiter = Limiter(key_func=get_remote_address)
 
 
 def _raise_from_value_error(e: ValueError) -> None:
@@ -65,7 +68,9 @@ def _guard_self_and_last_admin(actor: dict, target_user_id: str, action: str) ->
 
 
 @router.get("/accounts")
+@limiter.limit("5/minute")
 def list_accounts(
+    request: Request,
     status: Optional[str] = None,
     search: Optional[str] = None,
     cursor: Optional[str] = None,
@@ -83,7 +88,8 @@ def list_accounts(
 
 
 @router.post("/accounts/{user_id}/approve")
-def approve_account(user_id: str, actor: dict = Depends(require_admin)):
+@limiter.limit("5/minute")
+def approve_account(request: Request, user_id: str, actor: dict = Depends(require_admin)):
     try:
         return account_admin_service.change_status(actor["sub"], user_id, "active")
     except ValueError as e:
@@ -91,7 +97,8 @@ def approve_account(user_id: str, actor: dict = Depends(require_admin)):
 
 
 @router.post("/accounts/{user_id}/disable")
-def disable_account(user_id: str, actor: dict = Depends(require_admin)):
+@limiter.limit("5/minute")
+def disable_account(request: Request, user_id: str, actor: dict = Depends(require_admin)):
     _guard_self_and_last_admin(actor, user_id, "disable")
     try:
         return account_admin_service.change_status(actor["sub"], user_id, "disabled")
@@ -100,7 +107,8 @@ def disable_account(user_id: str, actor: dict = Depends(require_admin)):
 
 
 @router.post("/accounts/{user_id}/restore")
-def restore_account(user_id: str, actor: dict = Depends(require_admin)):
+@limiter.limit("5/minute")
+def restore_account(request: Request, user_id: str, actor: dict = Depends(require_admin)):
     try:
         return account_admin_service.change_status(actor["sub"], user_id, "active")
     except ValueError as e:
@@ -108,7 +116,8 @@ def restore_account(user_id: str, actor: dict = Depends(require_admin)):
 
 
 @router.post("/accounts/{user_id}/reset-link")
-def reset_link(user_id: str, actor: dict = Depends(require_admin)):
+@limiter.limit("5/minute")
+def reset_link(request: Request, user_id: str, actor: dict = Depends(require_admin)):
     try:
         reset_url = account_admin_service.create_reset_link(actor["sub"], user_id)
     except ValueError as e:
@@ -117,7 +126,9 @@ def reset_link(user_id: str, actor: dict = Depends(require_admin)):
 
 
 @router.delete("/accounts/{user_id}")
+@limiter.limit("5/minute")
 def delete_account(
+    request: Request,
     user_id: str,
     body: PermanentDeleteRequest,
     actor: dict = Depends(require_admin),
@@ -137,7 +148,9 @@ def delete_account(
 
 
 @router.get("/accounts/{user_id}/activity")
+@limiter.limit("5/minute")
 def account_activity(
+    request: Request,
     user_id: str,
     limit: int = Query(default=50, le=100),
     cursor: Optional[str] = None,
@@ -147,7 +160,9 @@ def account_activity(
 
 
 @router.get("/accounts/{user_id}/performance")
+@limiter.limit("5/minute")
 def account_performance(
+    request: Request,
     user_id: str,
     start: Optional[datetime] = None,
     end: Optional[datetime] = None,

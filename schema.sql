@@ -189,6 +189,8 @@ CREATE INDEX IF NOT EXISTS idx_report_history_pr_no
 -- ---------------------------------------------------------------------------
 ALTER TABLE users ADD COLUMN IF NOT EXISTS account_status VARCHAR(20) NOT NULL DEFAULT 'active';
 ALTER TABLE users ADD COLUMN IF NOT EXISTS session_version INTEGER NOT NULL DEFAULT 1;
+UPDATE users SET account_status = 'pending'
+WHERE is_active = FALSE AND account_status = 'active';
 
 -- ---------------------------------------------------------------------------
 -- account_audit_logs — records admin actions taken against a user account
@@ -219,7 +221,10 @@ CREATE TABLE IF NOT EXISTS user_sessions (
     user_id     VARCHAR(50)   NOT NULL,
     ip_address  VARCHAR(64),
     user_agent  TEXT,
+    session_id  UUID UNIQUE,
     started_at  TIMESTAMPTZ   NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_seen_at TIMESTAMPTZ,
+    logged_out_at TIMESTAMPTZ,
     expires_at  TIMESTAMPTZ,
     revoked_at  TIMESTAMPTZ
 );
@@ -234,12 +239,19 @@ CREATE INDEX IF NOT EXISTS idx_user_sessions_user_started
 CREATE TABLE IF NOT EXISTS request_telemetry (
     id           BIGSERIAL     PRIMARY KEY,
     user_id      VARCHAR(50),
+    request_id   UUID,
+    session_id   UUID,
     route        VARCHAR(200)  NOT NULL,
     method       VARCHAR(10),
     status_code  INTEGER,
     duration_ms  INTEGER,
     occurred_at  TIMESTAMPTZ   NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+ALTER TABLE user_sessions ADD COLUMN IF NOT EXISTS session_id UUID;
+ALTER TABLE user_sessions ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ;
+ALTER TABLE user_sessions ADD COLUMN IF NOT EXISTS logged_out_at TIMESTAMPTZ;
+ALTER TABLE request_telemetry ADD COLUMN IF NOT EXISTS request_id UUID;
+ALTER TABLE request_telemetry ADD COLUMN IF NOT EXISTS session_id UUID;
 
 CREATE INDEX IF NOT EXISTS idx_request_telemetry_user_occurred
     ON request_telemetry (user_id, occurred_at DESC);
@@ -277,8 +289,10 @@ CREATE TABLE IF NOT EXISTS password_reset_tokens (
     created_at  TIMESTAMPTZ   NOT NULL DEFAULT CURRENT_TIMESTAMP,
     expires_at  TIMESTAMPTZ   NOT NULL,
     used_at     TIMESTAMPTZ,
+    revoked_at  TIMESTAMPTZ,
     UNIQUE (token_hash)
 );
+ALTER TABLE password_reset_tokens ADD COLUMN IF NOT EXISTS revoked_at TIMESTAMPTZ;
 
 CREATE INDEX IF NOT EXISTS idx_password_reset_tokens_user
     ON password_reset_tokens (user_id);

@@ -52,9 +52,19 @@ app.include_router(account_admin_router)
 
 
 _COOKIE_NAME = "dpa_token"
+_RESET_PATH_PREFIX = "/api/auth/reset-password/"
 
 
-def _extract_actor_user_id(request: Request):
+def _safe_request_path(request: Request) -> str:
+    """Return a log-safe, templated path without URL-embedded secrets."""
+    path = request.url.path
+    if path.startswith(_RESET_PATH_PREFIX):
+        return "/api/auth/reset-password/{token}"
+    route = request.scope.get("route")
+    return route.path if route else path
+
+
+def _extract_telemetry_identity(request: Request):
     """
     Best-effort JWT decode for telemetry attribution: cookie first, then
     Authorization: Bearer header, mirroring get_current_user's extraction
@@ -67,14 +77,14 @@ def _extract_actor_user_id(request: Request):
         if auth_header.lower().startswith("bearer "):
             token = auth_header[7:].strip()
     if not token:
-        return None
+        return None, None
     try:
         payload = decode_token(token)
-        return payload.get("sub")
+        return payload.get("sub"), payload.get("sid")
     except JWTError:
-        return None
+        return None, None
     except Exception:
-        return None
+        return None, None
 
 
 @app.middleware("http")
@@ -83,16 +93,16 @@ async def request_log_middleware(request: Request, call_next):
     start = time.perf_counter()
     response = await call_next(request)
     elapsed = (time.perf_counter() - start) * 1000
-    log.info("%s %s  →  %s  (%.0fms)", request.method, request.url.path, response.status_code, elapsed)
+    safe_path = _safe_request_path(request)
+    log.info("%s %s  →  %s  (%.0fms)", request.method, safe_path, response.status_code, elapsed)
 
     if request.url.path != "/health":
-        route = request.scope.get("route")
-        route_path = route.path if route else request.url.path
-        actor_user_id = _extract_actor_user_id(request)
+        actor_user_id, session_id = _extract_telemetry_identity(request)
         telemetry_service.record_request_telemetry(
             request_id=request.state.request_id,
             user_id=actor_user_id,
-            route=route_path,
+            session_id=session_id,
+            route=safe_path,
             method=request.method,
             status_code=response.status_code,
             duration_ms=elapsed,
