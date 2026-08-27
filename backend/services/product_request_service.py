@@ -402,6 +402,7 @@ def list_timepoint_folders(pr_number: str, timepoint: str, lot: str) -> list[dic
                     ) AS imc_valid_count,
                     COUNT(*) FILTER (
                         WHERE (UPPER(category) LIKE '%%C-R%%' OR UPPER(category) LIKE '%%CR%%')
+                          AND UPPER(category) NOT LIKE '%%CROSS%%'
                           AND image_seq IN ({cr_placeholders})
                     ) AS cr_valid_count
                 FROM image_records
@@ -418,7 +419,10 @@ def list_timepoint_folders(pr_number: str, timepoint: str, lot: str) -> list[dic
             raw_folders = [{"name": r[0], "fileCount": r[1]} for r in raw_rows]
             imc_valid_file_count = next((r[2] for r in raw_rows if "IMC" in r[0].upper()), 0)
             cr_valid_file_count  = next(
-                (r[3] for r in raw_rows if "C-R" in r[0].upper() or "CR" in r[0].upper()), 0
+                (r[3] for r in raw_rows
+                 if ("C-R" in r[0].upper() or "CR" in r[0].upper())
+                 and "CROSS" not in r[0].upper()),
+                0,
             )
 
             # Query 2 — IMC value count + bond type count + SEM count (combined)
