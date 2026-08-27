@@ -17,10 +17,10 @@ import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from psycopg2.extras import RealDictCursor
+from psycopg2.extras import Json, RealDictCursor
 
 from services.db_connector import DBConnector
-from services.audit_service import AuditEvent, write_audit_event
+from services.audit_service import AuditEvent, write_audit_event, mirror_event, _sanitize_state
 from logger import get_logger
 
 log = get_logger("account_admin_service")
@@ -210,8 +210,12 @@ def permanently_delete(
     validation is the router's job).
 
     Writes an audit log entry with a before_state snapshot BEFORE deleting
-    the row, so the audit trail survives the account's removal rather than
-    relying on any cascade.
+    the row. The snapshot SELECT, the audit-row INSERT, and the DELETE all
+    run on the same connection/transaction and are committed together, so
+    the audit trail can never claim a deletion that didn't actually happen
+    (or vice versa) -- if the DELETE fails, the audit INSERT rolls back with
+    it. The JSONL mirror is written only after that transaction commits,
+    consistent with write_audit_event's own fail-open ordering.
     """
     if not reason or not reason.strip():
         raise ValueError("reason is required to permanently delete an account")
@@ -223,32 +227,50 @@ def permanently_delete(
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute("SELECT * FROM users WHERE user_id = %s", (target_user_id,))
             before = cur.fetchone()
-    finally:
-        DBConnector.release_dpa_connection(conn)
+            if not before:
+                raise ValueError(f"user not found: {target_user_id}")
 
-    if not before:
-        raise ValueError(f"user not found: {target_user_id}")
+            before_state = {k: v for k, v in dict(before).items() if k != "password_hash"}
+            before_state["reason"] = reason.strip()
 
-    before_state = {k: v for k, v in dict(before).items() if k != "password_hash"}
-    before_state["reason"] = reason.strip()
+            event = AuditEvent(
+                actor_user_id=actor_user_id,
+                target_user_id=target_user_id,
+                action="permanently_delete",
+                before_state=before_state,
+                after_state=None,
+            )
+            sanitized_before = _sanitize_state(event.before_state)
+            sanitized_after = _sanitize_state(event.after_state)
 
-    write_audit_event(
-        AuditEvent(
-            actor_user_id=actor_user_id,
-            target_user_id=target_user_id,
-            action="permanently_delete",
-            before_state=before_state,
-            after_state=None,
-        )
-    )
+            cur.execute(
+                """
+                INSERT INTO account_audit_logs
+                    (actor_user_id, target_user_id, action, before_state, after_state, occurred_at)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    event.actor_user_id,
+                    event.target_user_id,
+                    event.action,
+                    Json(sanitized_before) if sanitized_before is not None else None,
+                    Json(sanitized_after) if sanitized_after is not None else None,
+                    event.occurred_at,
+                ),
+            )
 
-    conn = DBConnector.get_dpa_connection()
-    try:
-        with conn.cursor() as cur:
             cur.execute("DELETE FROM users WHERE user_id = %s", (target_user_id,))
         conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         DBConnector.release_dpa_connection(conn)
+
+    # The JSONL mirror is explicitly fail-open and has no transactional
+    # coupling to the DB row -- write it after the transaction above has
+    # already committed both the audit insert and the delete.
+    mirror_event(event)
 
     return {"user_id": target_user_id, "deleted": True}
 

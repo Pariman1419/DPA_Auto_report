@@ -277,6 +277,56 @@ def test_permanently_delete_writes_snapshot_before_delete(mock_db, tmp_path, mon
     assert "shouldneverbepersisted" not in content
 
 
+def test_permanently_delete_audit_insert_and_delete_share_one_transaction(
+    mock_db, tmp_path, monkeypatch
+):
+    """
+    The audit-row INSERT and the DELETE must run on the same connection/
+    cursor and be committed exactly once together, so a failed delete can
+    never leave behind an audit row claiming a deletion that didn't happen.
+    """
+    monkeypatch.setenv("AUDIT_LOG_ROOT", str(tmp_path))
+    conn, cur = mock_db
+    cur.fetchone.return_value = {
+        "user_id": "EMP001",
+        "full_name": "QA Engineer",
+        "password_hash": "$2b$12$shouldneverbepersisted",
+        "account_status": "disabled",
+    }
+
+    get_conn_calls = []
+    from services import db_connector
+
+    def _tracking_get_conn():
+        get_conn_calls.append(1)
+        return conn
+
+    monkeypatch.setattr(
+        db_connector.DBConnector, "get_dpa_connection", staticmethod(_tracking_get_conn)
+    )
+
+    svc.permanently_delete(
+        "admin", "EMP001", confirm_user_id="EMP001", reason="requested by employee"
+    )
+
+    # Only one connection acquired for the SELECT + audit INSERT + DELETE.
+    assert len(get_conn_calls) == 1
+
+    insert_calls = [
+        c for c in cur.execute.call_args_list if "INSERT INTO account_audit_logs" in c[0][0]
+    ]
+    delete_calls = [c for c in cur.execute.call_args_list if "DELETE FROM users" in c[0][0]]
+    assert len(insert_calls) == 1
+    assert len(delete_calls) == 1
+
+    # Both statements executed on the same cursor object, and only one
+    # commit for the whole transaction.
+    assert cur.execute.call_args_list.index(insert_calls[0]) < cur.execute.call_args_list.index(
+        delete_calls[0]
+    )
+    assert conn.commit.call_count == 1
+
+
 # ── account_admin_service.activity / performance ─────────────────────────────
 
 def test_activity_queries_by_target_user_id(mock_db):
