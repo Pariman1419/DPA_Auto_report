@@ -124,7 +124,7 @@ def _record_telemetry(request: Request, safe_path: str, status_code: int, elapse
 
 @app.middleware("http")
 async def request_log_middleware(request: Request, call_next):
-    request.state.request_id = uuid4()
+    request.state.request_id = str(uuid4())
     start = time.perf_counter()
     try:
         response = await call_next(request)
