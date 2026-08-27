@@ -409,7 +409,7 @@ Content-Disposition: attachment; filename="DPA_Report_..."
 
 // Response 200 — caller presents a valid JWT (cookie or Authorization: Bearer)
 // with role == "admin" (decoded from the token only, no DB round-trip)
-{ "status": "ok", "gitSha": "b79206a" }
+{ "status": "ok", "gitSha": "abc1234" }
 ```
 `gitSha` echoes the `APP_GIT_SHA` env var baked into the image at build time
 (see `docker-compose.yml`'s `APP_GIT_SHA: ${GIT_SHA:-unknown}` build arg);

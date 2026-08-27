@@ -165,8 +165,12 @@ def health(request: Request):
     """Public liveness/readiness probe -- stays DB-independent.
 
     `gitSha` is only included when the caller presents a valid JWT with
-    role=admin (decoded straight from the token, no DB round-trip -- this
-    mirrors how get_current_user treats tokens without the `sv` claim).
+    role=admin (decoded straight from the token, no DB round-trip). This
+    deliberately skips the `sv` (session_version) revocation check that
+    get_current_user normally performs -- unlike get_current_user, this
+    endpoint never hits the DB, so a revoked admin's still-unexpired token
+    can leak a short git SHA here. That's an accepted tradeoff to keep
+    `/health` DB-independent (a plan goal), not an oversight.
     A missing/invalid/expired token is never an error here: it just means
     `gitSha` is omitted.
     """

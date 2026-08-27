@@ -7,11 +7,15 @@
 .git/
 .gitignore
 .pnpm-store/
+**/.pnpm-store/
 node_modules/
+**/node_modules/
 venv/
+**/venv/
 __pycache__/
 **/__pycache__/
 *.pyc
+**/*.pyc
 .pytest_cache/
 .ruff_cache/
 tests/
@@ -20,6 +24,10 @@ docs/
 .claude/
 scripts/dev/
 logs/
+**/logs/
 *.log
+**/*.log
 .env
 .env.*
+**/.env
+**/.env.*

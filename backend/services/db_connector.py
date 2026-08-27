@@ -1,6 +1,7 @@
 import os
 import sys
 import threading
+import time
 import psycopg2
 import psycopg2.pool
 import oracledb
@@ -40,6 +41,8 @@ DW_CONFIG = {
 class DBConnector:
     _dpa_pool = None
     _pool_lock = threading.Lock()
+    _last_init_failure_ts = None
+    _INIT_RETRY_COOLDOWN_SECONDS = 30
 
     @classmethod
     def initialize_dpa_pool(cls):
@@ -50,16 +53,47 @@ class DBConnector:
         only one caller will ever construct the pool; the rest reuse it.
         Safe to call again after the pool already exists -- it's a no-op
         that returns the existing pool.
+
+        Fails open (logs and returns None) rather than raising when the pool
+        can't be constructed -- e.g. the DB is unreachable at startup. This is
+        deliberate and load-bearing: tests/conftest.py runs the real FastAPI
+        lifespan via TestClient(app) as a context manager for the whole test
+        suite, and a fail-fast pool init would break every API test on any
+        machine without a local Postgres reachable at DB_HOST (PH-10's
+        "default suite is deterministic" requirement). Do not change this to
+        fail-fast without also reworking the test fixtures.
+
+        Retry cooldown: if a prior attempt in this process failed recently
+        (within _INIT_RETRY_COOLDOWN_SECONDS), re-entries return None
+        immediately instead of acquiring the lock and attempting another
+        construction. Without this, every caller of get_dpa_connection()
+        (including per-request telemetry in main.py, which runs on every
+        non-/health request) would queue up behind each other's slow
+        connect_timeout=10s attempts while the DB is down/unreachable,
+        serializing request threads that don't even touch the DB.
         """
         if cls._dpa_pool is not None:
             return cls._dpa_pool
+        if cls._last_init_failure_ts is not None:
+            elapsed = time.monotonic() - cls._last_init_failure_ts
+            if elapsed < cls._INIT_RETRY_COOLDOWN_SECONDS:
+                return None
         with cls._pool_lock:
             if cls._dpa_pool is None:
+                # Re-check cooldown inside the lock: another thread may have
+                # just failed an attempt while we were waiting to acquire it.
+                if (
+                    cls._last_init_failure_ts is not None
+                    and time.monotonic() - cls._last_init_failure_ts < cls._INIT_RETRY_COOLDOWN_SECONDS
+                ):
+                    return None
                 try:
                     cls._dpa_pool = psycopg2.pool.ThreadedConnectionPool(1, 10, **DPA_CONFIG)
+                    cls._last_init_failure_ts = None
                 except Exception as e:
                     log.error("Failed to initialize DPA connection pool: %s", e)
                     cls._dpa_pool = None
+                    cls._last_init_failure_ts = time.monotonic()
         return cls._dpa_pool
 
     @classmethod

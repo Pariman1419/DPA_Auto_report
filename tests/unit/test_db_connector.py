@@ -20,8 +20,10 @@ def _reset_pool_state():
     """Ensure each test starts with a clean, uninitialized pool."""
     from services import db_connector
     db_connector.DBConnector._dpa_pool = None
+    db_connector.DBConnector._last_init_failure_ts = None
     yield
     db_connector.DBConnector._dpa_pool = None
+    db_connector.DBConnector._last_init_failure_ts = None
 
 
 @pytest.mark.unit

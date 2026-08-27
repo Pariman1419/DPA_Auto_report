@@ -31,6 +31,9 @@ def _raising_route(app):
 
     app.include_router(router)
     yield
+    app.router.routes = [
+        r for r in app.router.routes if getattr(r, "path", None) != "/api/__test__/boom"
+    ]
 
 
 @pytest.mark.api
