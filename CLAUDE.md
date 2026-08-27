@@ -66,6 +66,7 @@ Optional but important:
 | `ENABLE_PIPELINE_DOCKER_FALLBACK` | `false` | Must be exactly `"true"` (case-insensitive/whitespace-tolerant) to allow `POST /api/trigger-pipeline` to fall back to shelling out to the Docker CLI when the HTTP trigger is unreachable. Disabled by default so production never runs that privileged fallback; failures instead return a sanitized 502 with a request ID |
 | `APP_GIT_SHA` | `unknown` | Baked into the backend/frontend images at build time via the `APP_GIT_SHA` Docker build arg (set from the `GIT_SHA` env var passed to `docker compose build` — see `docker-compose.yml`). Surfaced by `GET /health` as `gitSha`, but only to callers with a valid admin JWT |
 | `ALLOWED_ORIGINS` | `http://localhost:3000` | Comma-separated CORS origins |
+| `TELEMETRY_ROLLUP_HOUR_UTC` | `0` | Hour (0–23, UTC) the in-process daily telemetry rollup runs at `:05` past, aggregating `request_telemetry` into `endpoint_latency_daily` for System Monitoring's Daily Performance tab. Runs as a background asyncio task owned by the app's lifespan — no external cron/Task Scheduler needed |
 | `COOKIE_SECURE` | `false` | Set `true` in HTTPS production |
 | `SMTP_HOST`, `SMTP_PORT`, `APPROVER_EMAIL`, `SENDER_EMAIL`, `BASE_URL` | — | Email for user approval workflow |
 

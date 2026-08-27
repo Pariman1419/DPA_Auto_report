@@ -1,10 +1,13 @@
 from dotenv import load_dotenv
 load_dotenv()  # must run before any service module is imported
 
+import asyncio
+import contextlib
 import os
 import time
 import uvicorn
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -26,15 +29,51 @@ from services.db_connector import initialize_dpa_pool, close_dpa_pool
 
 log = get_logger("main")
 
+# Hour (0-23, UTC) the daily telemetry rollup runs at :05 past. Overridable
+# so an operator can shift it off a known-busy hour without a code change.
+_ROLLUP_HOUR_UTC = int(os.getenv("TELEMETRY_ROLLUP_HOUR_UTC", "0"))
+
+
+def _seconds_until_next_rollup(now: datetime) -> float:
+    """Seconds from `now` (UTC) until the next scheduled rollup run, which
+    always lands in the future -- today's slot if it hasn't passed yet,
+    otherwise tomorrow's."""
+    target = now.replace(hour=_ROLLUP_HOUR_UTC, minute=5, second=0, microsecond=0)
+    if target <= now:
+        target += timedelta(days=1)
+    return (target - now).total_seconds()
+
+
+async def _daily_rollup_loop():
+    """Runs telemetry_service.rollup_daily_latency once a day for the
+    previous day's data, in-process -- so the container needs no external
+    cron/Task Scheduler to keep System Monitoring's Daily Performance tab
+    populated. A failed rollup is logged and retried at the next scheduled
+    time; it never crashes the app (same fail-open spirit as telemetry
+    recording itself)."""
+    while True:
+        await asyncio.sleep(_seconds_until_next_rollup(datetime.now(timezone.utc)))
+        target_date = (datetime.now(timezone.utc) - timedelta(days=1)).date()
+        try:
+            count = await asyncio.to_thread(telemetry_service.rollup_daily_latency, target_date)
+            log.info("Daily telemetry rollup complete for %s: %d route(s)", target_date, count)
+        except Exception:
+            log.exception("Daily telemetry rollup failed for %s", target_date)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Own the DPA database pool's lifecycle for the app's lifetime:
-    construct it once at startup, close it once at shutdown."""
+    construct it once at startup, close it once at shutdown. Also owns the
+    daily telemetry-rollup background task's lifecycle the same way."""
     initialize_dpa_pool()
+    rollup_task = asyncio.create_task(_daily_rollup_loop())
     try:
         yield
     finally:
+        rollup_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await rollup_task
         close_dpa_pool()
 
 
