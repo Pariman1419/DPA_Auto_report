@@ -1,15 +1,13 @@
 """
 Tests for GET /health (backend/main.py).
 
-Covers PH-01 from docs/superpowers/plans/2026-08-27-production-hardening.md:
-health must expose the running build's commit SHA (APP_GIT_SHA) for
-deployment verification, without leaking any secret-shaped values
-(DB credentials, JWT secret, tokens).
-
-/health is called by unauthenticated monitoring today (see
-tests/api/test_telemetry.py::test_health_check_records_nothing, which hits
-it with no auth headers) so this test does not add an auth requirement to
-the endpoint itself -- only the gitSha field's presence is under test here.
+Covers PH-01a/PH-01b/PH-01c from
+docs/superpowers/plans/2026-08-27-production-hardening.md: /health stays
+public and DB-independent (infrastructure liveness/readiness probe), but the
+gitSha field (sourced from APP_GIT_SHA) is only included for authenticated
+admins -- non-admin/anonymous callers get {"status": "ok"} with no gitSha,
+without leaking any secret-shaped values (DB credentials, JWT secret,
+tokens).
 """
 import os
 
@@ -17,9 +15,23 @@ import pytest
 
 
 @pytest.mark.api
-def test_health_reports_configured_git_sha(client, monkeypatch):
+def test_health_unauthenticated_has_no_git_sha(client, monkeypatch):
+    """PH-01a: GET /health with no auth -> 200, status only, no gitSha."""
     monkeypatch.setenv("APP_GIT_SHA", "abc123")
     resp = client.get("/health")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert "gitSha" not in body
+    assert set(body.keys()) == {"status"}
+
+
+@pytest.mark.api
+def test_health_admin_sees_git_sha(client, admin_cookies, monkeypatch):
+    """PH-01b: GET /health authenticated as admin -> 200, status + gitSha."""
+    monkeypatch.setenv("APP_GIT_SHA", "abc123")
+    resp = client.get("/health", cookies=admin_cookies)
 
     assert resp.status_code == 200
     body = resp.json()
@@ -28,11 +40,23 @@ def test_health_reports_configured_git_sha(client, monkeypatch):
 
 
 @pytest.mark.api
-def test_health_exposes_no_secret_values(client, monkeypatch):
+def test_health_non_admin_has_no_git_sha(client, auth_cookies, monkeypatch):
+    """PH-01c: GET /health authenticated as non-admin -> 200, status only."""
     monkeypatch.setenv("APP_GIT_SHA", "abc123")
-    resp = client.get("/health")
+    resp = client.get("/health", cookies=auth_cookies)
 
+    assert resp.status_code == 200
     body = resp.json()
+    assert body["status"] == "ok"
+    assert "gitSha" not in body
+    assert set(body.keys()) == {"status"}
+
+
+@pytest.mark.api
+def test_health_exposes_no_secret_values(client, admin_cookies, monkeypatch):
+    monkeypatch.setenv("APP_GIT_SHA", "abc123")
+    resp = client.get("/health", cookies=admin_cookies)
+
     text = resp.text.lower()
 
     secret_values = [
@@ -46,4 +70,4 @@ def test_health_exposes_no_secret_values(client, monkeypatch):
             assert secret.lower() not in text
 
     allowed_keys = {"status", "gitSha"}
-    assert set(body.keys()) <= allowed_keys
+    assert set(resp.json().keys()) <= allowed_keys

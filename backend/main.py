@@ -112,8 +112,32 @@ async def request_log_middleware(request: Request, call_next):
 
 
 @app.get("/health")
-def health():
-    return {"status": "ok", "gitSha": os.getenv("APP_GIT_SHA", "unknown")}
+def health(request: Request):
+    """Public liveness/readiness probe -- stays DB-independent.
+
+    `gitSha` is only included when the caller presents a valid JWT with
+    role=admin (decoded straight from the token, no DB round-trip -- this
+    mirrors how get_current_user treats tokens without the `sv` claim).
+    A missing/invalid/expired token is never an error here: it just means
+    `gitSha` is omitted.
+    """
+    body = {"status": "ok"}
+
+    token = request.cookies.get(_COOKIE_NAME)
+    if not token:
+        auth_header = request.headers.get("authorization", "")
+        if auth_header.lower().startswith("bearer "):
+            token = auth_header[7:].strip()
+
+    if token:
+        try:
+            payload = decode_token(token)
+        except Exception:
+            payload = None
+        if payload and payload.get("role") == "admin":
+            body["gitSha"] = os.getenv("APP_GIT_SHA", "unknown")
+
+    return body
 
 
 if __name__ == "__main__":
