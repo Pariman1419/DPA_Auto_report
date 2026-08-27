@@ -300,7 +300,8 @@ not a best-effort telemetry write.
 //              or container names are ever returned to the client.
 { "detail": "Pipeline trigger failed (request <request_id>)" }
 
-// Error 500 — Docker CLI fallback is enabled but all trigger methods failed
+// Error 502 — Docker CLI fallback is enabled but all trigger methods failed
+//              (same sanitized shape as above: generic message plus request ID)
 ```
 The HTTP trigger to the Auto_detect watcher (`PIPELINE_TRIGGER_URL` /
 `http://localhost:9091/trigger` / `http://host.docker.internal:9091/trigger`)
