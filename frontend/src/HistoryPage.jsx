@@ -80,7 +80,14 @@ export function HistoryPage() {
       if (res.ok) {
         setHistory(prev => prev.filter(r => r.id !== row.id));
       } else {
-        alert('Delete failed.');
+        let detail = 'Delete failed.';
+        try {
+          const errData = await res.json();
+          detail = errData.detail || detail;
+        } catch {
+          // response body wasn't JSON — fall back to the generic message
+        }
+        alert(detail);
       }
     } catch {
       alert('Delete failed.');
