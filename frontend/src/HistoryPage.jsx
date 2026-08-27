@@ -54,7 +54,17 @@ export function HistoryPage() {
     setDownloading(row.id);
     try {
       const res = await apiFetch(`/api/history/${row.id}/download`);
-      if (!res.ok) { alert('File not found on disk.'); return; }
+      if (!res.ok) {
+        let detail = 'Download failed.';
+        try {
+          const errData = await res.json();
+          detail = errData.detail || detail;
+        } catch {
+          // response body wasn't JSON — fall back to the generic message
+        }
+        alert(detail);
+        return;
+      }
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');

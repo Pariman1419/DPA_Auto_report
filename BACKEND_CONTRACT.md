@@ -133,6 +133,15 @@ All endpoints require authentication unless marked **[public]**
 ["MTDQS0906.1", "MTDQS0907.2"]
 ```
 
+### GET /api/product-request/{pr_number}/lots-registry
+```json
+// Response 200
+{
+  "MTDQS0906.1": ["T0", "T168", "T500"],
+  "MTDQS0907.2": ["T0", "T168"]
+}
+```
+
 ### GET /api/product-request/{pr_number}/timepoints?lot={lot}
 ```json
 // Response 200
@@ -241,6 +250,30 @@ All endpoints require authentication unless marked **[public]**
 }
 
 // Error 500 — generation failed (detail contains error message)
+```
+
+---
+
+## Pipeline Integration
+
+### POST /api/trigger-pipeline **[admin]** **[rate: 3/min]**
+```json
+// Response 200
+{ "status": "success", "message": "Pipeline triggered successfully via HTTP API" }
+
+// Also supports:
+// { "status": "success", "message": "Pipeline triggered successfully via docker restart" }
+// { "status": "success", "message": "Pipeline triggered successfully via docker-compose restart" }
+
+// Error 500 — all trigger methods failed
+```
+
+### GET /api/pipeline-status
+```json
+// Response 200 — proxied from auto-detect watcher (http://localhost:9091/status)
+{ "busy": false, "cycle_count": 42 }
+
+// Error 503 — all upstream URLs failed
 ```
 
 ---
