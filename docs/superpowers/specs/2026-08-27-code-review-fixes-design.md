@@ -79,11 +79,12 @@ Currently only `/login` (`auth.py`) and `/trigger-pipeline` (`3/minute`) are rat
 |---|---|---|
 | `POST /api/generate-report` | product_request.py | `3/minute` (heavy — builds a PPTX) |
 | `GET /api/download-report` | product_request.py | `10/minute` |
-| `GET /api/image` | product_request.py | `30/minute` (previews load many images) |
 | `POST /api/auth/register` | auth.py | `5/minute` (match `/login`) |
 | `GET /api/auth/approve/{token}` | auth.py | `5/minute` |
 
 Each handler needs the `Request` param added if not already present (required by `slowapi` for the limiter to key off the client address), following the existing pattern in `trigger_pipeline(request: Request, ...)`.
+
+**`GET /api/image` — excluded from this list, revised assumption:** the initial draft proposed `30/minute` here, but `frontend/src/CreateReport.jsx` renders many `<img src="/api/image?...">` tags per page (preview grids with a "show more" past 10 images, plus SEM record galleries) — a single page view can legitimately fire well over 30 requests from one client in seconds, and multiple users behind the same office NAT would share that per-IP budget. A per-IP rate limit here would break normal gallery browsing, not just abuse. Leaving `/api/image` unlimited for now; its existing path-containment check (`is_relative_to(safe_root)`) is the actual protection CLAUDE.md calls for on file-serving endpoints. If abuse protection is wanted later, it should be a much higher ceiling (e.g. per-minute in the hundreds) or keyed by authenticated user rather than IP — a follow-up, not part of this fix.
 
 ## 5. Standards — role / ownership gating
 
