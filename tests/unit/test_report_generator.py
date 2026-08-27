@@ -62,11 +62,9 @@ def test_image_size_config_imc_dimensions():
 def test_translate_path_win_to_mount(monkeypatch):
     monkeypatch.setenv("IMAGE_WIN_ROOT",   r"D:\Auto_detect\Result")
     monkeypatch.setenv("IMAGE_MOUNT_ROOT", "/mnt/result")
-    import importlib
-    import services.report_generator as rg
-    importlib.reload(rg)  # pick up new env vars
+    from services.report_generator import _translate_image_path
 
-    result = rg._translate_image_path(r"D:\Auto_detect\Result\PR2024001\img.jpg")
+    result = _translate_image_path(r"D:\Auto_detect\Result\PR2024001\img.jpg")
     assert result == "/mnt/result/PR2024001/img.jpg"
 
 def test_translate_path_none_returns_none():

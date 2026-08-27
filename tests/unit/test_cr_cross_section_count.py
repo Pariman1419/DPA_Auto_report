@@ -110,4 +110,4 @@ def test_sql_filter_excludes_cross_section_from_cr_valid_count(mock_db):
     cr_valid_clause = aggregate_sql[clause_start:filter_start]
 
     assert "NOT LIKE '%%CROSS%%'" in cr_valid_clause
-    assert "C-R" in cr_valid_clause or "CR" in cr_valid_clause
+    assert "LIKE '%%C-R%%'" in cr_valid_clause

@@ -61,6 +61,8 @@ Optional but important:
 | `IMAGE_WIN_ROOT` | `D:\Auto_detect\Result` | Path prefix stored in DB |
 | `IMAGE_MOUNT_ROOT` | same as `IMAGE_WIN_ROOT` | Where that path is mounted locally |
 | `PIPELINE_COMPOSE_PATH` | `D:\Auto_detect\docker-compose.yml` | docker-compose file used as a fallback to restart the Auto_detect pipeline when HTTP trigger URLs fail |
+| `PIPELINE_TRIGGER_URL` | `http://localhost:9091/trigger` | HTTP URL for the auto-detect pipeline trigger endpoint (overrides default; tried before docker fallbacks) |
+| `PIPELINE_STATUS_URL` | `http://localhost:9091/status` | HTTP URL for the auto-detect pipeline status endpoint (returns busy/cycle_count) |
 | `ALLOWED_ORIGINS` | `http://localhost:3000` | Comma-separated CORS origins |
 | `COOKIE_SECURE` | `false` | Set `true` in HTTPS production |
 | `SMTP_HOST`, `SMTP_PORT`, `APPROVER_EMAIL`, `SENDER_EMAIL`, `BASE_URL` | — | Email for user approval workflow |
