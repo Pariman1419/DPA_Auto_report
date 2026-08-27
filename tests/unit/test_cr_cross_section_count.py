@@ -46,3 +46,25 @@ def test_cross_section_row_does_not_pollute_cr_count(mock_db):
         f for f in folders if f["name"] == "CROSS SECTION INSPECTION"
     )
     assert cross_folder["fileCount"] == 12  # its own file_count, untouched
+
+
+def test_cross_section_sorts_separately_from_cr(mock_db):
+    """CROSS SECTION INSPECTION must not share the C-R sort bucket."""
+    from services.product_request_service import list_timepoint_folders
+
+    conn, cur = mock_db
+    cur.fetchall.return_value = [
+        ("CROSS SECTION INSPECTION", 12, 0, 99),
+        ("6.C-R", 4, 0, 4),
+    ]
+    cur.fetchone.return_value = (0, 0, 3)
+
+    with patch(
+        "services.product_request_service.find_bond_ability_excel",
+        return_value=None,
+    ):
+        folders = list_timepoint_folders("PR2024001", "T0", "MTDQS0906.1")
+
+    names_in_order = [f["name"] for f in folders]
+    # 6.C-R (priority 6) must come before CROSS SECTION INSPECTION (priority 8)
+    assert names_in_order.index("6.C-R") < names_in_order.index("CROSS SECTION INSPECTION")

@@ -480,9 +480,9 @@ def list_timepoint_folders(pr_number: str, timepoint: str, lot: str) -> list[dic
                 if "X-RAY" in n or "XRAY" in n: return 3
                 if "DECAP" in n: return 4
                 if "IMC" in n: return 5
+                if "CROSS SECTION" in n: return 8
                 if "C-R" in n or "CR" in n: return 6
                 if "BS,WP,SP" in n: return 7
-                if "CROSS SECTION" in n: return 8
                 return 99
 
             # Sort the final folder list
