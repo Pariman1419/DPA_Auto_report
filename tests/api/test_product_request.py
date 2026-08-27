@@ -182,6 +182,69 @@ def test_trigger_pipeline_allowed_for_admin(client, admin_cookies):
         assert response.json()["status"] == "success"
 
 
+def test_trigger_pipeline_production_never_calls_docker(client, admin_cookies, monkeypatch):
+    """PH-03: with ENABLE_PIPELINE_DOCKER_FALLBACK unset (production default),
+    a watcher HTTP failure must never fall back to subprocess.run, and the
+    response must be a sanitized 502/503 carrying only a request ID."""
+    monkeypatch.delenv("ENABLE_PIPELINE_DOCKER_FALLBACK", raising=False)
+    with patch("urllib.request.urlopen", side_effect=OSError("connection refused")), \
+         patch("routers.product_request.subprocess.run") as mock_run:
+        response = client.post("/api/trigger-pipeline", cookies=admin_cookies)
+
+        assert response.status_code in (502, 503)
+        mock_run.assert_not_called()
+        detail = response.json()["detail"]
+        assert "Pipeline trigger failed" in detail
+        # Sanitized: no free-form exception text, no infra paths.
+        assert "connection refused" not in detail
+        assert "docker" not in detail.lower()
+
+
+def test_trigger_pipeline_dev_fallback_requires_explicit_flag(client, admin_cookies, monkeypatch):
+    """PH-04: the Docker CLI fallback only runs when
+    ENABLE_PIPELINE_DOCKER_FALLBACK=true is explicitly set, and calls Docker
+    with fixed, allowlisted args."""
+    monkeypatch.setenv("ENABLE_PIPELINE_DOCKER_FALLBACK", "true")
+    mock_result = MagicMock()
+    mock_result.returncode = 0
+    with patch("urllib.request.urlopen", side_effect=OSError("connection refused")), \
+         patch("routers.product_request.subprocess.run", return_value=mock_result) as mock_run:
+        response = client.post("/api/trigger-pipeline", cookies=admin_cookies)
+
+        assert response.status_code == 200
+        mock_run.assert_called_once_with(
+            ["docker", "restart", "auto_detect-pipeline-1"],
+            capture_output=True, text=True, timeout=10.0,
+        )
+
+
+def test_trigger_pipeline_error_is_sanitized_in_response(client, admin_cookies, monkeypatch, caplog):
+    """PH-05: infra details (compose path, container name) that leak into a
+    Docker/HTTP failure never reach the client response, but the server log
+    still carries the request ID and a sanitized failure category so ops can
+    correlate and debug."""
+    monkeypatch.setenv("ENABLE_PIPELINE_DOCKER_FALLBACK", "true")
+
+    fail_result = MagicMock()
+    fail_result.returncode = 1
+    fail_result.stderr = "Error: No such container: auto_detect-pipeline-1 at /srv/compose.yml"
+
+    import logging
+    with caplog.at_level(logging.ERROR, logger="product_request"):
+        with patch("urllib.request.urlopen", side_effect=OSError("connection refused")), \
+             patch("routers.product_request.subprocess.run", return_value=fail_result):
+            response = client.post("/api/trigger-pipeline", cookies=admin_cookies)
+
+    assert response.status_code in (502, 503)
+    body_text = response.text
+    assert "/srv/compose.yml" not in body_text
+    assert "auto_detect-pipeline-1" not in body_text
+
+    log_text = caplog.text
+    assert "request_id" in log_text or "request" in log_text
+    assert "docker_fallback_error" in log_text
+
+
 # ── Carry-forward endpoints smoke tests (lots-registry / pipeline-status) ──────
 # These endpoints entered version control for the first time on this branch
 # (carried forward from uncommitted working-tree state) with no prior test

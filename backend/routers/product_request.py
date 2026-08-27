@@ -209,10 +209,25 @@ def get_image(path: str, _user=Depends(get_current_user)):
     return FileResponse(path=str(requested), media_type=media_type)
 
 
+def _pipeline_docker_fallback_enabled() -> bool:
+    return os.getenv("ENABLE_PIPELINE_DOCKER_FALLBACK", "false").strip().lower() == "true"
+
+
 @router.post("/trigger-pipeline")
 @limiter.limit("3/minute")
 def trigger_pipeline(request: Request, _user=Depends(require_role("admin"))):
-    """Trigger the auto-detect pipeline (System 1) to scan and process immediately."""
+    """Trigger the auto-detect pipeline (System 1) to scan and process immediately.
+
+    The watcher HTTP trigger is the only path used in production. The local
+    Docker CLI fallback (shelling out to `docker`/`docker-compose` from the API
+    process) is a privileged operation and only runs when an operator has
+    explicitly opted in via ENABLE_PIPELINE_DOCKER_FALLBACK=true (development
+    use). Errors are never surfaced to the client with infrastructure detail
+    (paths, container names, subprocess stderr) -- those are logged server-side
+    and correlated to the client by request ID.
+    """
+    request_id = getattr(request.state, "request_id", "unknown")
+
     # 1. Try via HTTP API first
     urls = [
         os.getenv("PIPELINE_TRIGGER_URL"),
@@ -220,7 +235,7 @@ def trigger_pipeline(request: Request, _user=Depends(require_role("admin"))):
         "http://host.docker.internal:9091/trigger",
     ]
     urls = list(dict.fromkeys([u for u in urls if u]))
-    
+
     trigger_token = os.getenv("WATCHER_TRIGGER_TOKEN", "")
 
     triggered_via_http = False
@@ -237,13 +252,24 @@ def trigger_pipeline(request: Request, _user=Depends(require_role("admin"))):
                     break
         except Exception as e:
             http_error_msg = str(e)
-            
+
     if triggered_via_http:
         return {"status": "success", "message": "Pipeline triggered successfully via HTTP API"}
 
-    # 2. Try via docker CLI commands as fallbacks
+    # 2. Docker CLI fallback is opt-in only -- never runs in production by default.
+    if not _pipeline_docker_fallback_enabled():
+        log.error(
+            "Pipeline trigger failed [request_id=%s] category=watcher_http_unreachable "
+            "(docker fallback disabled): %s",
+            request_id, http_error_msg,
+        )
+        raise HTTPException(
+            status_code=502,
+            detail=f"Pipeline trigger failed (request {request_id})",
+        )
+
     log.warning(f"Failed to trigger pipeline via HTTP URLs (last error: {http_error_msg}). Trying local Docker CLI fallback...")
-    
+
     try:
         # Try docker restart first
         res = subprocess.run(["docker", "restart", "auto_detect-pipeline-1"], capture_output=True, text=True, timeout=10.0)
@@ -259,10 +285,13 @@ def trigger_pipeline(request: Request, _user=Depends(require_role("admin"))):
             else:
                 raise Exception(f"docker restart failed: {res.stderr}; docker-compose restart failed: {res2.stderr}")
     except Exception as e:
-        log.error(f"Failed to trigger pipeline via Docker CLI fallback: {e}")
+        log.error(
+            "Pipeline trigger failed [request_id=%s] category=docker_fallback_error: %s",
+            request_id, e,
+        )
         raise HTTPException(
-            status_code=500,
-            detail=f"Failed to trigger pipeline. Error: {str(e)}"
+            status_code=502,
+            detail=f"Pipeline trigger failed (request {request_id})",
         )
 
 
