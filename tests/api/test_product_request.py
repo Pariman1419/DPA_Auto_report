@@ -182,6 +182,43 @@ def test_trigger_pipeline_allowed_for_admin(client, admin_cookies):
         assert response.json()["status"] == "success"
 
 
+# ── Carry-forward endpoints smoke tests (lots-registry / pipeline-status) ──────
+# These endpoints entered version control for the first time on this branch
+# (carried forward from uncommitted working-tree state) with no prior test
+# coverage; these are basic smoke tests, not exhaustive.
+
+def test_lots_registry_returns_mocked_data(client, auth_cookies):
+    """GET /api/product-request/{pr_number}/lots-registry returns data from list_lots_registry."""
+    mock_registry = [
+        {"lotName": "MT1234567.1", "timepoint": "T0", "hasData": True},
+        {"lotName": "MT1234567.2", "timepoint": "T0", "hasData": False},
+    ]
+    with patch("routers.product_request.list_lots_registry", return_value=mock_registry):
+        response = client.get("/api/product-request/PR2024001/lots-registry", cookies=auth_cookies)
+        assert response.status_code == 200
+        assert response.json() == mock_registry
+
+
+def test_pipeline_status_returns_parsed_json_on_success(client, auth_cookies):
+    """GET /api/pipeline-status returns the parsed JSON body when an upstream URL responds 200."""
+    with patch("urllib.request.urlopen") as mock_urlopen:
+        mock_response = MagicMock()
+        mock_response.status = 200
+        mock_response.read.return_value = b'{"busy": false, "cycle_count": 3}'
+        mock_urlopen.return_value.__enter__.return_value = mock_response
+        response = client.get("/api/pipeline-status", cookies=auth_cookies)
+        assert response.status_code == 200
+        assert response.json() == {"busy": False, "cycle_count": 3}
+
+
+def test_pipeline_status_returns_503_when_all_upstream_urls_fail(client, auth_cookies):
+    """GET /api/pipeline-status returns 503 when every upstream URL raises."""
+    with patch("urllib.request.urlopen", side_effect=Exception("connection refused")):
+        response = client.get("/api/pipeline-status", cookies=auth_cookies)
+        assert response.status_code == 503
+        assert response.json()["detail"] == "Pipeline status unavailable"
+
+
 # ── Product Requests metadata ──────────────────────────────────────────────────
 
 def test_get_all_product_requests(client, auth_cookies):
