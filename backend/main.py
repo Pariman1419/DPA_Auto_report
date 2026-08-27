@@ -4,6 +4,7 @@ load_dotenv()  # must run before any service module is imported
 import os
 import time
 import uvicorn
+from contextlib import asynccontextmanager
 from uuid import uuid4
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -20,13 +21,27 @@ from routers.auth import router as auth_router
 from routers.account_admin import router as account_admin_router
 from services.auth_service import decode_token
 from services import telemetry_service
+from services.db_connector import initialize_dpa_pool, close_dpa_pool
 
 log = get_logger("main")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Own the DPA database pool's lifecycle for the app's lifetime:
+    construct it once at startup, close it once at shutdown."""
+    initialize_dpa_pool()
+    try:
+        yield
+    finally:
+        close_dpa_pool()
+
 
 app = FastAPI(
     title="DPA QA Test Manager API",
     description="Backend API for reading Product Request Excel files",
     version="1.0.0",
+    lifespan=lifespan,
 )
 
 # Rate limiter
