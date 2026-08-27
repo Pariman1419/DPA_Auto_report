@@ -1,3 +1,4 @@
+import hashlib
 import os
 import smtplib
 from email.message import EmailMessage
@@ -17,7 +18,8 @@ from services.auth_service import (
     ACCESS_TOKEN_EXPIRE_HOURS, SECRET_KEY,
 )
 from services.db_connector import DBConnector
-from models.schemas import LoginRequest, RegisterRequest, TokenResponse
+from services.audit_service import AuditEvent, write_audit_event
+from models.schemas import LoginRequest, RegisterRequest, TokenResponse, ResetPasswordRequest
 from logger import get_logger
 
 log = get_logger("auth")
@@ -44,16 +46,44 @@ def get_current_user(
     request: Request,
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer),
 ) -> dict:
-    """Extract and validate JWT from httpOnly cookie (primary) or Bearer header (fallback)."""
+    """Extract and validate JWT from httpOnly cookie (primary) or Bearer header (fallback).
+
+    Tokens minted before the `sv` (session_version) claim existed -- i.e. any
+    token without that claim -- are honored exactly as before this feature
+    was added; no DB lookup is performed. Tokens carrying `sv` are checked
+    against the live users.session_version so an admin-triggered password
+    reset / session revocation can invalidate them. That check fails CLOSED
+    (401) if the DB is unavailable, since this is an authentication gate, not
+    a best-effort telemetry/audit write.
+    """
     token = request.cookies.get(_COOKIE_NAME)
     if not token and credentials:
         token = credentials.credentials
     if not token:
         raise HTTPException(status_code=401, detail="Not authenticated")
     try:
-        return decode_token(token)
+        payload = decode_token(token)
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
+
+    sv = payload.get("sv")
+    if sv is not None:
+        conn = DBConnector.get_dpa_connection()
+        if not conn:
+            raise HTTPException(status_code=401, detail="Invalid or expired token")
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT session_version FROM users WHERE user_id = %s",
+                    (payload.get("sub"),),
+                )
+                row = cur.fetchone()
+            if not row or row[0] != sv:
+                raise HTTPException(status_code=401, detail="Invalid or expired token")
+        finally:
+            DBConnector.release_dpa_connection(conn)
+
+    return payload
 
 
 def require_role(*roles: str):
@@ -77,7 +107,7 @@ def login(request: Request, req: LoginRequest, response: Response):
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(
-                "SELECT user_id, full_name, role, password_hash "
+                "SELECT user_id, full_name, role, password_hash, session_version "
                 "FROM users WHERE user_id = %s AND is_active = True",
                 (req.userId,),
             )
@@ -99,6 +129,7 @@ def login(request: Request, req: LoginRequest, response: Response):
             "sub":  user["user_id"],
             "name": user["full_name"],
             "role": user["role"],
+            "sv":   user["session_version"],
         })
 
         response.set_cookie(
@@ -211,3 +242,66 @@ def approve_user(request: Request, token: str, _admin=Depends(require_admin)):
         return {"message": f"User {user_id} has been approved and activated."}
     finally:
         DBConnector.release_dpa_connection(conn)
+
+
+@router.post("/reset-password/{token}")
+@limiter.limit("5/minute")
+def reset_password(request: Request, token: str, req: ResetPasswordRequest):
+    """
+    Consume a one-time password reset link (issued by
+    account_admin_service.create_reset_link). The raw token from the URL is
+    hashed the same way it was stored (SHA-256) and looked up in
+    password_reset_tokens; never the itsdangerous-signed mechanism used for
+    approval links.
+
+    Atomic per-request: the "is this token still valid" check and the
+    consuming UPDATE happen together (UPDATE ... WHERE used_at IS NULL AND
+    expires_at > now() RETURNING user_id) so a token can only ever be spent
+    once, even under concurrent requests. If it returns no row, the token
+    was already used, expired, or never existed -- always reported as a
+    generic 400 to avoid leaking which case it was. On success, the password
+    update and the session_version bump happen in the same transaction and
+    are committed together, so a reset can never invalidate sessions without
+    actually changing the password (or vice versa).
+    """
+    token_hash = hashlib.sha256(token.encode()).hexdigest()
+
+    conn = DBConnector.get_dpa_connection()
+    if not conn:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE password_reset_tokens SET used_at = now() "
+                "WHERE token_hash = %s AND used_at IS NULL AND expires_at > now() "
+                "RETURNING user_id",
+                (token_hash,),
+            )
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(status_code=400, detail="Invalid or expired reset link")
+            user_id = row[0]
+
+            cur.execute(
+                "UPDATE users SET password_hash = %s, session_version = session_version + 1 "
+                "WHERE user_id = %s",
+                (hash_password(req.password), user_id),
+            )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        DBConnector.release_dpa_connection(conn)
+
+    write_audit_event(
+        AuditEvent(
+            actor_user_id=None,
+            target_user_id=user_id,
+            action="password_reset",
+            before_state=None,
+            after_state={"method": "reset_link"},
+        )
+    )
+    log.info("Password reset via reset link for user %s", user_id)
+    return {"status": "success", "message": "Password has been reset."}

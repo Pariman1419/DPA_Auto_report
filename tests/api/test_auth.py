@@ -2,6 +2,8 @@
 API tests for /api/auth/* endpoints.
 Uses FastAPI TestClient and a mocked DB connector.
 """
+import hashlib
+
 import pytest
 from unittest.mock import MagicMock, patch
 from itsdangerous import SignatureExpired, BadSignature
@@ -31,9 +33,15 @@ def test_login_success(client, mock_db, sample_user):
     # Assert httpOnly cookie is set
     assert "dpa_token" in response.cookies
     cur.execute.assert_called_with(
-        "SELECT user_id, full_name, role, password_hash FROM users WHERE user_id = %s AND is_active = True",
+        "SELECT user_id, full_name, role, password_hash, session_version "
+        "FROM users WHERE user_id = %s AND is_active = True",
         ("EMP001",)
     )
+
+    # New tokens carry the user's current session_version as the `sv` claim
+    from services.auth_service import decode_token
+    payload = decode_token(data["access_token"])
+    assert payload["sv"] == sample_user["session_version"]
 
 
 def test_login_password_upgrade(client, mock_db, sample_user):
@@ -281,7 +289,159 @@ def test_logout_success(client, auth_cookies):
     response = client.post("/api/auth/logout", cookies=auth_cookies)
     assert response.status_code == 200
     assert response.json()["status"] == "ok"
-    
+
     # Assert cookie is cleared
     cookie = response.cookies.get("dpa_token")
     assert cookie == "" or cookie is None
+
+
+# ── Session-version enforcement Tests ───────────────────────────────────────
+#
+# get_current_user is used across ~25 protected routes (via require_role too).
+# We exercise it here through /api/auth/approve/{token}, which is gated by
+# require_admin -> get_current_user, without touching product_request.py.
+
+def test_get_current_user_old_token_no_sv_claim_passes_through(client, mock_db, admin_cookies):
+    """A token minted without an `sv` claim (e.g. by the untouched make_token
+    fixture) must NOT trigger any session_version DB lookup and must be let
+    through exactly as before this feature existed."""
+    conn, cur = mock_db
+    cur.fetchone.return_value = (True,)  # already-active short-circuits further writes
+
+    with patch("routers.auth._ts.loads", return_value="EMP999"):
+        response = client.get("/api/auth/approve/some_token", cookies=admin_cookies)
+
+    assert response.status_code == 200
+    # No query should ever mention session_version for an sv-less token.
+    for call in cur.execute.call_args_list:
+        assert "session_version" not in call[0][0]
+
+
+def test_get_current_user_sv_matches_session_version_passes(client, mock_db):
+    """A token carrying `sv` that matches the DB's current session_version is
+    accepted."""
+    from services.auth_service import create_access_token
+
+    conn, cur = mock_db
+    # First fetchone: the sv-check SELECT; second: approve's is_active check.
+    cur.fetchone.side_effect = [(1,), (True,)]
+
+    token = create_access_token({"sub": "admin", "name": "Admin User", "role": "admin", "sv": 1})
+    with patch("routers.auth._ts.loads", return_value="EMP999"):
+        response = client.get("/api/auth/approve/some_token", cookies={"dpa_token": token})
+
+    assert response.status_code == 200
+
+
+def test_get_current_user_sv_mismatch_returns_401(client, mock_db):
+    """A token carrying an `sv` that no longer matches users.session_version
+    (e.g. because an admin reset the password / revoked sessions) is
+    rejected with 401, reusing the standard invalid-token message."""
+    from services.auth_service import create_access_token
+
+    conn, cur = mock_db
+    cur.fetchone.return_value = (1,)  # current session_version in DB
+
+    token = create_access_token({"sub": "admin", "name": "Admin User", "role": "admin", "sv": 99})
+    response = client.get("/api/auth/approve/some_token", cookies={"dpa_token": token})
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Invalid or expired token"
+
+
+def test_get_current_user_sv_present_user_not_found_returns_401(client, mock_db):
+    """If the sv-bearing token's subject no longer exists, fail closed."""
+    from services.auth_service import create_access_token
+
+    conn, cur = mock_db
+    cur.fetchone.return_value = None
+
+    token = create_access_token({"sub": "ghost", "name": "Ghost", "role": "admin", "sv": 1})
+    response = client.get("/api/auth/approve/some_token", cookies={"dpa_token": token})
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Invalid or expired token"
+
+
+def test_get_current_user_sv_present_db_unavailable_fails_closed(client, monkeypatch):
+    """When `sv` is present but the DB connection cannot be established, the
+    request must be rejected (401), not silently allowed through -- this is
+    an authn check, so the fail-open convention used elsewhere does NOT
+    apply here."""
+    from services.auth_service import create_access_token
+    from services import db_connector
+    monkeypatch.setattr(db_connector.DBConnector, "get_dpa_connection",
+                        staticmethod(lambda: None))
+
+    token = create_access_token({"sub": "admin", "name": "Admin User", "role": "admin", "sv": 1})
+    response = client.get("/api/auth/approve/some_token", cookies={"dpa_token": token})
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Invalid or expired token"
+
+
+# ── Reset-password Tests ────────────────────────────────────────────────────
+
+def test_reset_password_invalid_or_expired_token_returns_400(client, mock_db):
+    """A token whose hash isn't found unused-and-unexpired (already used,
+    expired, or never existed) returns 400 without leaking which case it
+    was."""
+    client.cookies.clear()
+    conn, cur = mock_db
+    cur.fetchone.return_value = None  # UPDATE ... RETURNING found no row
+
+    response = client.post("/api/auth/reset-password/bad-token", json={"password": "NewPassw0rd!"})
+
+    assert response.status_code == 400
+    assert conn.commit.call_count == 0
+
+
+def test_reset_password_success(client, mock_db):
+    """A valid, unused, unexpired reset token: updates the bcrypt password,
+    marks the token used, bumps session_version, and logs an audit event
+    (self-service, no actor, no credential material)."""
+    client.cookies.clear()
+    conn, cur = mock_db
+    cur.fetchone.return_value = ("EMP001",)  # RETURNING user_id
+
+    raw_token = "raw-reset-token-value"
+    expected_hash = hashlib.sha256(raw_token.encode()).hexdigest()
+
+    with patch("routers.auth.write_audit_event") as mock_audit:
+        response = client.post(
+            f"/api/auth/reset-password/{raw_token}",
+            json={"password": "NewPassw0rd!"},
+        )
+
+    assert response.status_code == 200
+
+    # The consume-token UPDATE must be parameterized with the SHA-256 hash,
+    # never the raw token.
+    consume_calls = [
+        call for call in cur.execute.call_args_list
+        if "password_reset_tokens" in call[0][0] and "used_at" in call[0][0]
+    ]
+    assert len(consume_calls) == 1
+    assert consume_calls[0][0][1] == (expected_hash,)
+
+    # The password update + session_version bump happen in the same
+    # transaction and are committed once.
+    pw_calls = [
+        call for call in cur.execute.call_args_list
+        if "UPDATE users SET password_hash" in call[0][0]
+    ]
+    assert len(pw_calls) == 1
+    assert "session_version" in pw_calls[0][0][0]
+    assert pw_calls[0][0][1][-1] == "EMP001"
+    assert conn.commit.call_count == 1
+
+    # Audit event: self-service reset, no actor, no credential material.
+    mock_audit.assert_called_once()
+    event = mock_audit.call_args[0][0]
+    assert event.action == "password_reset"
+    assert event.target_user_id == "EMP001"
+    assert event.actor_user_id is None
+    for state in (event.before_state, event.after_state):
+        if state:
+            assert "password" not in str(state).lower()
+            assert "token" not in str(state).lower()

@@ -140,10 +140,11 @@ def mock_db(monkeypatch):
 
 # ── 7. Standard test-data fixtures ───────────────────────────────────────────
 SAMPLE_USER_ROW = {
-    "user_id":       "EMP001",
-    "full_name":     "QA Engineer One",
-    "role":          "QA Engineer",
-    "password_hash": "$2b$12$KIXjV3qJ8Z1mN2pL5oR7OuWvHkT9xYcBdEfGhAiJsPlQrMnUzSw4K",
+    "user_id":         "EMP001",
+    "full_name":       "QA Engineer One",
+    "role":            "QA Engineer",
+    "password_hash":   "$2b$12$KIXjV3qJ8Z1mN2pL5oR7OuWvHkT9xYcBdEfGhAiJsPlQrMnUzSw4K",
+    "session_version": 1,
 }
 
 SAMPLE_PR_ROW = {
