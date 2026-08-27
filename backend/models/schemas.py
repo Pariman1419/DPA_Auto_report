@@ -106,3 +106,8 @@ class TokenResponse(BaseModel):
 
 class ResetPasswordRequest(BaseModel):
     password: str
+
+
+class PermanentDeleteRequest(BaseModel):
+    confirmUserId: str
+    reason: str

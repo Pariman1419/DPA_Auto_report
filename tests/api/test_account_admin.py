@@ -17,7 +17,10 @@ import pathlib
 
 import pytest
 
-pytestmark = pytest.mark.integration
+# NOTE: intentionally NOT a module-level `pytestmark` -- this file also holds
+# the Task 4 API tests below (marked `api`), and a module-level pytestmark
+# would force the `integration` marker onto every test in the file. The
+# schema test itself is marked individually instead.
 
 REPO_ROOT = pathlib.Path(__file__).parent.parent.parent
 SCHEMA_SQL = REPO_ROOT / "schema.sql"
@@ -98,6 +101,7 @@ def _run_sql_file(conn, path: pathlib.Path):
     conn.commit()
 
 
+@pytest.mark.integration
 def test_account_admin_schema(pg_container):
     import psycopg2
 
@@ -194,3 +198,345 @@ def test_account_admin_schema(pg_container):
                 "request_telemetry missing (route, occurred_at DESC) index"
     finally:
         conn.close()
+
+
+# ===========================================================================
+# API tests for /api/admin/accounts/* (Task 4)
+#
+# These mock services.account_admin_service directly (patched on the
+# routers.account_admin module, where the router does
+# `from services import account_admin_service` and calls
+# account_admin_service.<fn>(...)) rather than the DB layer -- the service
+# functions' own DB behaviour is Task 2's concern; this file verifies the
+# router's role gating, request/response shaping, error translation, and the
+# self/last-admin guards that live in the router per Task 4's design.
+# ===========================================================================
+import pytest
+from unittest.mock import patch
+
+pytestmark_api = pytest.mark.api
+
+
+NON_ADMIN_ROUTES = [
+    ("get", "/api/admin/accounts"),
+    ("post", "/api/admin/accounts/EMP999/approve"),
+    ("post", "/api/admin/accounts/EMP999/disable"),
+    ("post", "/api/admin/accounts/EMP999/restore"),
+    ("post", "/api/admin/accounts/EMP999/reset-link"),
+    ("delete", "/api/admin/accounts/EMP999"),
+    ("get", "/api/admin/accounts/EMP999/activity"),
+    ("get", "/api/admin/accounts/EMP999/performance"),
+]
+
+
+@pytest.mark.api
+@pytest.mark.parametrize("method,path", NON_ADMIN_ROUTES)
+@pytest.mark.parametrize("token_fixture", ["qa_token", "user_token"])
+def test_admin_routes_forbidden_for_non_admin_roles(client, method, path, token_fixture, request):
+    """Every /api/admin/* route rejects both 'user' and 'QA Engineer' roles
+    with 403 -- only role == 'admin' may invoke these endpoints."""
+    client.cookies.clear()
+    token = request.getfixturevalue(token_fixture)
+    headers = {"Authorization": f"Bearer {token}"}
+    if method == "delete":
+        response = client.request(
+            "DELETE", path, headers=headers,
+            json={"confirmUserId": "EMP999", "reason": "test"},
+        )
+    else:
+        response = getattr(client, method)(path, headers=headers)
+    assert response.status_code == 403
+
+
+@pytest.mark.api
+def test_admin_routes_401_without_auth(client):
+    """Unauthenticated requests are rejected before role checks even run."""
+    client.cookies.clear()
+    response = client.get("/api/admin/accounts")
+    assert response.status_code == 401
+
+
+# ── list_accounts ────────────────────────────────────────────────────────
+
+
+def test_list_accounts_admin_success(client, admin_headers):
+    client.cookies.clear()
+    fake_result = {"items": [{"user_id": "EMP001", "role": "user"}], "next_cursor": None}
+    with patch("routers.account_admin.account_admin_service.list_accounts", return_value=fake_result) as mock_list:
+        response = client.get(
+            "/api/admin/accounts?status=active&search=emp&limit=25",
+            headers=admin_headers,
+        )
+    assert response.status_code == 200
+    assert response.json() == fake_result
+    mock_list.assert_called_once_with(status="active", search="emp", cursor=None, limit=25)
+    assert "resetUrl" not in response.text
+
+
+def test_list_accounts_limit_over_100_rejected(client, admin_headers):
+    client.cookies.clear()
+    response = client.get("/api/admin/accounts?limit=101", headers=admin_headers)
+    assert response.status_code == 422
+
+
+# ── approve ──────────────────────────────────────────────────────────────
+
+
+def test_approve_account_success(client, admin_headers):
+    client.cookies.clear()
+    fake_result = {"user_id": "EMP999", "account_status": "active", "is_active": True}
+    with patch("routers.account_admin.account_admin_service.change_status", return_value=fake_result) as mock_cs:
+        response = client.post("/api/admin/accounts/EMP999/approve", headers=admin_headers)
+    assert response.status_code == 200
+    assert response.json() == fake_result
+    mock_cs.assert_called_once_with("admin", "EMP999", "active")
+
+
+def test_approve_account_not_found_returns_404(client, admin_headers):
+    client.cookies.clear()
+    with patch(
+        "routers.account_admin.account_admin_service.change_status",
+        side_effect=ValueError("user not found: GHOST"),
+    ):
+        response = client.post("/api/admin/accounts/GHOST/approve", headers=admin_headers)
+    assert response.status_code == 404
+
+
+# ── disable ──────────────────────────────────────────────────────────────
+
+
+def test_disable_account_success(client, admin_headers):
+    client.cookies.clear()
+    fake_result = {"user_id": "EMP999", "account_status": "disabled", "is_active": False}
+    with patch("routers.account_admin.account_admin_service.get_account",
+               return_value={"user_id": "EMP999", "role": "user", "account_status": "active"}), \
+         patch("routers.account_admin.account_admin_service.change_status", return_value=fake_result) as mock_cs:
+        response = client.post("/api/admin/accounts/EMP999/disable", headers=admin_headers)
+    assert response.status_code == 200
+    assert response.json() == fake_result
+    mock_cs.assert_called_once_with("admin", "EMP999", "disabled")
+
+
+def test_disable_self_returns_409(client, admin_headers):
+    """Self-disable is rejected before any service call -- would lock the
+    admin out of their own account."""
+    client.cookies.clear()
+    with patch("routers.account_admin.account_admin_service.get_account") as mock_get, \
+         patch("routers.account_admin.account_admin_service.change_status") as mock_cs:
+        response = client.post("/api/admin/accounts/admin/disable", headers=admin_headers)
+    assert response.status_code == 409
+    mock_get.assert_not_called()
+    mock_cs.assert_not_called()
+
+
+def test_disable_last_active_admin_returns_409(client, admin_headers):
+    """Disabling the only active admin (not self) is rejected."""
+    client.cookies.clear()
+    with patch("routers.account_admin.account_admin_service.get_account",
+               return_value={"user_id": "OTHERADMIN", "role": "admin", "account_status": "active"}), \
+         patch("routers.account_admin.account_admin_service.count_active_admins", return_value=1), \
+         patch("routers.account_admin.account_admin_service.change_status") as mock_cs:
+        response = client.post("/api/admin/accounts/OTHERADMIN/disable", headers=admin_headers)
+    assert response.status_code == 409
+    mock_cs.assert_not_called()
+
+
+def test_disable_admin_when_multiple_active_admins_succeeds(client, admin_headers):
+    """Disabling an admin is fine when there are other active admins left."""
+    client.cookies.clear()
+    fake_result = {"user_id": "OTHERADMIN", "account_status": "disabled", "is_active": False}
+    with patch("routers.account_admin.account_admin_service.get_account",
+               return_value={"user_id": "OTHERADMIN", "role": "admin", "account_status": "active"}), \
+         patch("routers.account_admin.account_admin_service.count_active_admins", return_value=2), \
+         patch("routers.account_admin.account_admin_service.change_status", return_value=fake_result) as mock_cs:
+        response = client.post("/api/admin/accounts/OTHERADMIN/disable", headers=admin_headers)
+    assert response.status_code == 200
+    mock_cs.assert_called_once_with("admin", "OTHERADMIN", "disabled")
+
+
+# ── restore ──────────────────────────────────────────────────────────────
+
+
+def test_restore_account_success(client, admin_headers):
+    client.cookies.clear()
+    fake_result = {"user_id": "EMP999", "account_status": "active", "is_active": True}
+    with patch("routers.account_admin.account_admin_service.change_status", return_value=fake_result) as mock_cs:
+        response = client.post("/api/admin/accounts/EMP999/restore", headers=admin_headers)
+    assert response.status_code == 200
+    assert response.json() == fake_result
+    mock_cs.assert_called_once_with("admin", "EMP999", "active")
+
+
+# ── reset-link ───────────────────────────────────────────────────────────
+
+
+def test_reset_link_response_contains_raw_url_once(client, admin_headers):
+    client.cookies.clear()
+    fake_url = "http://localhost:9090/reset-password/some-raw-token-value"
+    with patch("routers.account_admin.account_admin_service.create_reset_link", return_value=fake_url) as mock_rl:
+        response = client.post("/api/admin/accounts/EMP999/reset-link", headers=admin_headers)
+    assert response.status_code == 200
+    assert response.json() == {"resetUrl": fake_url}
+    mock_rl.assert_called_once_with("admin", "EMP999")
+
+
+def test_reset_link_not_present_in_other_endpoint_responses(client, admin_headers):
+    """The raw reset URL must never appear in list/activity/performance/
+    approve/restore response bodies -- only /reset-link ever returns it."""
+    client.cookies.clear()
+    with patch("routers.account_admin.account_admin_service.list_accounts",
+               return_value={"items": [], "next_cursor": None}):
+        r1 = client.get("/api/admin/accounts", headers=admin_headers)
+    with patch("routers.account_admin.account_admin_service.activity",
+               return_value={"items": [], "next_cursor": None}):
+        r2 = client.get("/api/admin/accounts/EMP999/activity", headers=admin_headers)
+    with patch("routers.account_admin.account_admin_service.performance",
+               return_value={"request_count": 0, "error_count": 0, "avg_duration_ms": None, "max_duration_ms": None}):
+        r3 = client.get("/api/admin/accounts/EMP999/performance", headers=admin_headers)
+    with patch("routers.account_admin.account_admin_service.change_status",
+               return_value={"user_id": "EMP999", "account_status": "active", "is_active": True}):
+        r4 = client.post("/api/admin/accounts/EMP999/approve", headers=admin_headers)
+
+    for r in (r1, r2, r3, r4):
+        assert "resetUrl" not in r.text
+        assert "reset-password" not in r.text
+
+
+# ── permanent delete ─────────────────────────────────────────────────────
+
+
+def test_delete_account_success(client, admin_headers):
+    client.cookies.clear()
+    fake_result = {"user_id": "EMP999", "deleted": True}
+    with patch("routers.account_admin.account_admin_service.get_account",
+               return_value={"user_id": "EMP999", "role": "user", "account_status": "active"}), \
+         patch("routers.account_admin.account_admin_service.permanently_delete", return_value=fake_result) as mock_pd:
+        response = client.request(
+            "DELETE",
+            "/api/admin/accounts/EMP999",
+            headers=admin_headers,
+            json={"confirmUserId": "EMP999", "reason": "requested by user"},
+        )
+    assert response.status_code == 200
+    assert response.json() == fake_result
+    mock_pd.assert_called_once_with("admin", "EMP999", "EMP999", "requested by user")
+
+
+def test_delete_account_missing_body_returns_422(client, admin_headers):
+    client.cookies.clear()
+    response = client.request("DELETE", "/api/admin/accounts/EMP999", headers=admin_headers)
+    assert response.status_code == 422
+
+
+def test_delete_account_malformed_body_returns_422(client, admin_headers):
+    client.cookies.clear()
+    response = client.request(
+        "DELETE",
+        "/api/admin/accounts/EMP999",
+        headers=admin_headers,
+        json={"reason": "missing confirmUserId field"},
+    )
+    assert response.status_code == 422
+
+
+def test_delete_account_service_value_error_returns_400(client, admin_headers):
+    """confirmUserId mismatch / blank reason bubble up from the service as
+    ValueError and are translated to 400."""
+    client.cookies.clear()
+    with patch("routers.account_admin.account_admin_service.get_account",
+               return_value={"user_id": "EMP999", "role": "user", "account_status": "active"}), \
+         patch("routers.account_admin.account_admin_service.permanently_delete",
+               side_effect=ValueError("confirmUserId does not match the target account")):
+        response = client.request(
+            "DELETE",
+            "/api/admin/accounts/EMP999",
+            headers=admin_headers,
+            json={"confirmUserId": "WRONG", "reason": "test"},
+        )
+    assert response.status_code == 400
+
+
+def test_delete_self_returns_409(client, admin_headers):
+    client.cookies.clear()
+    with patch("routers.account_admin.account_admin_service.get_account") as mock_get, \
+         patch("routers.account_admin.account_admin_service.permanently_delete") as mock_pd:
+        response = client.request(
+            "DELETE",
+            "/api/admin/accounts/admin",
+            headers=admin_headers,
+            json={"confirmUserId": "admin", "reason": "test"},
+        )
+    assert response.status_code == 409
+    mock_get.assert_not_called()
+    mock_pd.assert_not_called()
+
+
+def test_delete_last_active_admin_returns_409(client, admin_headers):
+    client.cookies.clear()
+    with patch("routers.account_admin.account_admin_service.get_account",
+               return_value={"user_id": "OTHERADMIN", "role": "admin", "account_status": "active"}), \
+         patch("routers.account_admin.account_admin_service.count_active_admins", return_value=1), \
+         patch("routers.account_admin.account_admin_service.permanently_delete") as mock_pd:
+        response = client.request(
+            "DELETE",
+            "/api/admin/accounts/OTHERADMIN",
+            headers=admin_headers,
+            json={"confirmUserId": "OTHERADMIN", "reason": "test"},
+        )
+    assert response.status_code == 409
+    mock_pd.assert_not_called()
+
+
+# ── activity ─────────────────────────────────────────────────────────────
+
+
+def test_account_activity_success(client, admin_headers):
+    client.cookies.clear()
+    fake_result = {"items": [{"action": "change_status"}], "next_cursor": None}
+    with patch("routers.account_admin.account_admin_service.activity", return_value=fake_result) as mock_act:
+        response = client.get(
+            "/api/admin/accounts/EMP999/activity?limit=10&cursor=2024-01-01T00:00:00",
+            headers=admin_headers,
+        )
+    assert response.status_code == 200
+    assert response.json() == fake_result
+    mock_act.assert_called_once_with("EMP999", limit=10, cursor="2024-01-01T00:00:00")
+
+
+def test_account_activity_limit_over_100_rejected(client, admin_headers):
+    client.cookies.clear()
+    response = client.get("/api/admin/accounts/EMP999/activity?limit=500", headers=admin_headers)
+    assert response.status_code == 422
+
+
+# ── performance ──────────────────────────────────────────────────────────
+
+
+def test_account_performance_success(client, admin_headers):
+    client.cookies.clear()
+    fake_result = {
+        "request_count": 12,
+        "error_count": 1,
+        "avg_duration_ms": 123.4,
+        "max_duration_ms": 500.0,
+    }
+    with patch("routers.account_admin.account_admin_service.performance", return_value=fake_result) as mock_perf:
+        response = client.get(
+            "/api/admin/accounts/EMP999/performance?start=2024-01-01T00:00:00&end=2024-02-01T00:00:00",
+            headers=admin_headers,
+        )
+    assert response.status_code == 200
+    assert response.json() == fake_result
+    args, kwargs = mock_perf.call_args
+    assert args[0] == "EMP999"
+    assert kwargs["start"].year == 2024 and kwargs["start"].month == 1
+    assert kwargs["end"].year == 2024 and kwargs["end"].month == 2
+
+
+def test_account_performance_no_date_filters(client, admin_headers):
+    client.cookies.clear()
+    fake_result = {"request_count": 0, "error_count": 0, "avg_duration_ms": None, "max_duration_ms": None}
+    with patch("routers.account_admin.account_admin_service.performance", return_value=fake_result) as mock_perf:
+        response = client.get("/api/admin/accounts/EMP999/performance", headers=admin_headers)
+    assert response.status_code == 200
+    mock_perf.assert_called_once_with("EMP999", start=None, end=None)

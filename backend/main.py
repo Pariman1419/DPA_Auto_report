@@ -15,6 +15,7 @@ _configure()  # init logging before routers import
 
 from routers.product_request import router as product_request_router
 from routers.auth import router as auth_router
+from routers.account_admin import router as account_admin_router
 
 log = get_logger("main")
 
@@ -43,6 +44,7 @@ app.add_middleware(
 
 app.include_router(auth_router)
 app.include_router(product_request_router)
+app.include_router(account_admin_router)
 
 
 @app.middleware("http")

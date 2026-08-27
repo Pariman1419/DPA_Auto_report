@@ -276,6 +276,50 @@ def permanently_delete(
 
 
 # ---------------------------------------------------------------------------
+# count_active_admins / get_account
+# ---------------------------------------------------------------------------
+
+
+def count_active_admins() -> int:
+    """
+    Count currently-active accounts with role='admin'. Used by the router
+    (Task 4) to decide whether a disable/delete action would drop the system
+    to zero active admins.
+    """
+    conn = DBConnector.get_dpa_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT COUNT(*) FROM users WHERE role = %s AND account_status = %s",
+                ("admin", "active"),
+            )
+            row = cur.fetchone()
+    finally:
+        DBConnector.release_dpa_connection(conn)
+    return row[0] if row else 0
+
+
+def get_account(user_id: str) -> Optional[dict]:
+    """
+    Single-row lookup of an account's role/status, used by the router (Task 4)
+    to decide self/last-admin guard checks before calling change_status /
+    permanently_delete.
+    """
+    conn = DBConnector.get_dpa_connection()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                "SELECT user_id, full_name, email, role, account_status, is_active "
+                "FROM users WHERE user_id = %s",
+                (user_id,),
+            )
+            row = cur.fetchone()
+    finally:
+        DBConnector.release_dpa_connection(conn)
+    return dict(row) if row else None
+
+
+# ---------------------------------------------------------------------------
 # activity
 # ---------------------------------------------------------------------------
 
