@@ -19,9 +19,12 @@ from services.product_request_service import (
 from models.schemas import ProductRequestData, ProductRequestListItem, GenerateReportRequest
 from services.report_generator import DPAReportGenerator, OUTPUT_DIR
 from routers.auth import get_current_user
+from logger import get_logger
 
 router = APIRouter(prefix="/api", tags=["Product Request"])
 limiter = Limiter(key_func=get_remote_address)
+log = get_logger("product_request")
+PIPELINE_COMPOSE_PATH = os.getenv("PIPELINE_COMPOSE_PATH", r"D:\Auto_detect\docker-compose.yml")
 
 
 @router.get("/stats")
@@ -128,9 +131,7 @@ def generate_dpa_report(req: GenerateReportRequest, _user=Depends(get_current_us
         gen = DPAReportGenerator(req.prNumber, req.timepoint, req.lot, req.selectedSections, revision=next_rev)
         output_path, stats = gen.generate()
 
-        from logger import get_logger as _gl
-        _log = _gl("product_request")
-        _log.info("Report generated — PR=%s Lot=%s TP=%s metadata=%s images=%d missing=%d file=%s",
+        log.info("Report generated — PR=%s Lot=%s TP=%s metadata=%s images=%d missing=%d file=%s",
                   req.prNumber, req.lot, req.timepoint,
                   stats['metadata_found'], stats['images_found'], stats['images_missing'],
                   os.path.basename(output_path))
@@ -216,8 +217,7 @@ def trigger_pipeline(request: Request, _user=Depends(get_current_user)):
             with urllib.request.urlopen(req, timeout=3.0) as response:
                 if response.status == 200:
                     triggered_via_http = True
-                    from logger import get_logger as _gl
-                    _gl("product_request").info(f"Pipeline successfully triggered via HTTP URL: {url}")
+                    log.info(f"Pipeline successfully triggered via HTTP URL: {url}")
                     break
         except Exception as e:
             http_error_msg = str(e)
@@ -226,26 +226,24 @@ def trigger_pipeline(request: Request, _user=Depends(get_current_user)):
         return {"status": "success", "message": "Pipeline triggered successfully via HTTP API"}
 
     # 2. Try via docker CLI commands as fallbacks
-    from logger import get_logger as _gl
-    _log = _gl("product_request")
-    _log.warning(f"Failed to trigger pipeline via HTTP URLs (last error: {http_error_msg}). Trying local Docker CLI fallback...")
+    log.warning(f"Failed to trigger pipeline via HTTP URLs (last error: {http_error_msg}). Trying local Docker CLI fallback...")
     
     try:
         # Try docker restart first
         res = subprocess.run(["docker", "restart", "auto_detect-pipeline-1"], capture_output=True, text=True, timeout=10.0)
         if res.returncode == 0:
-            _log.info("Pipeline container auto_detect-pipeline-1 restarted successfully")
+            log.info("Pipeline container auto_detect-pipeline-1 restarted successfully")
             return {"status": "success", "message": "Pipeline triggered successfully via docker restart"}
         else:
             # Try docker-compose restart as second fallback
-            res2 = subprocess.run(["docker-compose", "-f", r"D:\Auto_detect\docker-compose.yml", "restart", "pipeline"], capture_output=True, text=True, timeout=15.0)
+            res2 = subprocess.run(["docker-compose", "-f", PIPELINE_COMPOSE_PATH, "restart", "pipeline"], capture_output=True, text=True, timeout=15.0)
             if res2.returncode == 0:
-                _log.info("Pipeline restarted successfully via docker-compose restart")
+                log.info("Pipeline restarted successfully via docker-compose restart")
                 return {"status": "success", "message": "Pipeline triggered successfully via docker-compose restart"}
             else:
                 raise Exception(f"docker restart failed: {res.stderr}; docker-compose restart failed: {res2.stderr}")
     except Exception as e:
-        _log.error(f"Failed to trigger pipeline via Docker CLI fallback: {e}")
+        log.error(f"Failed to trigger pipeline via Docker CLI fallback: {e}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to trigger pipeline. Error: {str(e)}"
