@@ -636,6 +636,33 @@ def list_lots(pr_no: str) -> list[str]:
         DBConnector.release_dpa_connection(conn)
 
 
+def list_lots_registry(pr_no: str) -> list[dict]:
+    """List all lots and timepoints from lot_registry for a given PR."""
+    conn = DBConnector.get_dpa_connection()
+    if not conn:
+        return []
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT lot_name, timepoint, has_data
+                FROM lot_registry
+                WHERE pr_no = %s
+                ORDER BY timepoint, lot_name
+                """,
+                (pr_no,),
+            )
+            return [
+                {"lotName": r[0], "timepoint": r[1], "hasData": bool(r[2])}
+                for r in cur.fetchall()
+            ]
+    except Exception as e:
+        log.warning("list_lots_registry error (table may not exist yet): %s", e)
+        return []
+    finally:
+        DBConnector.release_dpa_connection(conn)
+
+
 def get_next_revision(pr_no: str, timepoint: str) -> str:
     """Always return 'A' as requested (no increment)."""
     return "A"
@@ -809,11 +836,18 @@ def find_bond_ability_excel(pr_no: str, timepoint: str, lot: str):
                 log.debug("find_bond_ability_excel: no image_records for PR=%s TP=%s lot=%s", pr_no, timepoint, lot)
                 return None
             lot_base = os.path.dirname(os.path.dirname(_translate_image_path(row[0])))
-            excel_path = os.path.join(lot_base, "7.BS,WP,SP", "BOND_ABILITY_REPORT.xlsx")
-            if os.path.exists(excel_path):
+            excel_dir = os.path.join(lot_base, "7.BS,WP,SP")
+            # Auto_detect names files BOND_ABILITY_REPORT_<PR>_<TP>_<lot>_<date>.xlsx
+            candidates = sorted(
+                pathlib.Path(excel_dir).glob("BOND_ABILITY_REPORT*.xlsx"),
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
+            ) if os.path.isdir(excel_dir) else []
+            if candidates:
+                excel_path = str(candidates[0])
                 log.debug("Bond Excel found: %s", excel_path)
                 return excel_path
-            log.debug("Bond Excel not on disk: %s", excel_path)
+            log.debug("Bond Excel not on disk in: %s", excel_dir)
             return None
     except Exception as e:
         log.warning("find_bond_ability_excel error: %s", e)
