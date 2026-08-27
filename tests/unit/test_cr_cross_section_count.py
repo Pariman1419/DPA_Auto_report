@@ -68,3 +68,46 @@ def test_cross_section_sorts_separately_from_cr(mock_db):
     names_in_order = [f["name"] for f in folders]
     # 6.C-R (priority 6) must come before CROSS SECTION INSPECTION (priority 8)
     assert names_in_order.index("6.C-R") < names_in_order.index("CROSS SECTION INSPECTION")
+
+
+def test_sql_filter_excludes_cross_section_from_cr_valid_count(mock_db):
+    """
+    Both tests above only exercise the Python-side `next()` predicate and
+    `get_category_priority` against canned tuples — the actual SQL text sent
+    to PostgreSQL for `cr_valid_count`'s FILTER clause is never inspected.
+    This test captures the SQL string passed to `cur.execute(...)` for the
+    aggregate query and asserts the `NOT LIKE '%%CROSS%%'` exclusion is
+    actually present, in the `cr_valid_count` FILTER clause specifically
+    (not just anywhere in the query).
+    """
+    from services.product_request_service import list_timepoint_folders
+
+    conn, cur = mock_db
+    cur.fetchall.return_value = [
+        ("6.C-R", 4, 0, 4),
+    ]
+    cur.fetchone.return_value = (0, 0, 3)
+
+    with patch(
+        "services.product_request_service.find_bond_ability_excel",
+        return_value=None,
+    ):
+        list_timepoint_folders("PR2024001", "T0", "MTDQS0906.1")
+
+    # Find the call whose SQL text builds cr_valid_count (the aggregate query).
+    aggregate_sql = next(
+        call.args[0]
+        for call in cur.execute.call_args_list
+        if "cr_valid_count" in call.args[0]
+    )
+
+    # Isolate the cr_valid_count FILTER clause and assert the CROSS exclusion
+    # is present inside it (not merely present somewhere else in the query).
+    filter_start = aggregate_sql.index("cr_valid_count")
+    # The FILTER clause for cr_valid_count precedes its own alias; walk back
+    # to the start of that FILTER(...) block.
+    clause_start = aggregate_sql.rindex("COUNT(*) FILTER", 0, filter_start)
+    cr_valid_clause = aggregate_sql[clause_start:filter_start]
+
+    assert "NOT LIKE '%%CROSS%%'" in cr_valid_clause
+    assert "C-R" in cr_valid_clause or "CR" in cr_valid_clause
