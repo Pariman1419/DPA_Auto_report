@@ -111,8 +111,38 @@ docker-compose up --build
 All backend config lives in `backend/.env` (see `backend/.env.example`). Variables that cause
 startup to abort if missing: `DB_HOST`, `DB_USER`, `DB_PASSWORD`, `JWT_SECRET_KEY`.
 
+`AUDIT_LOG_ROOT` (default `D:\Auto_detect\logs\dpa-account-audit`) sets where the account-admin
+audit trail is mirrored as sanitized JSONL (`{YYYY-MM-DD}.jsonl`, one object per line), in
+addition to the `account_audit_logs` PostgreSQL table. The JSONL write is fail-open — a write
+failure (permission, disk full, unreachable path) is logged as a warning and never blocks or
+undoes the underlying account action.
+
 > 🔒 **Security note:** the real `.env` is gitignored and never committed. Only `.env.example`
 > with placeholder values ships in the repo.
+
+## 👤 Account Administration & Observability
+
+Admins get a dedicated Account Management page (`frontend/src/AccountManagementPage.jsx`,
+`/api/admin/accounts/*` — see [`BACKEND_CONTRACT.md`](BACKEND_CONTRACT.md#account-administration--apiadmin)
+for the full endpoint reference) to approve, disable, restore, and permanently delete accounts,
+issue one-time password-reset links, and review per-account activity and request-latency history.
+
+- **Reset links** are shown once in the admin UI (never emailed) and lead to a public
+  `/reset-password/{token}` page (`frontend/src/ResetPasswordPage.jsx`). Links expire after 30
+  minutes and are usable exactly once; only a SHA-256 hash of the token is ever stored.
+- **Session invalidation** — a successful reset (or any admin-triggered session bump) increments
+  `users.session_version`; every JWT carries that version as its `sv` claim, and protected routes
+  reject a token whose `sv` no longer matches the database, logging the caller out everywhere.
+- **Audit trail** — every privileged action writes a row to `account_audit_logs` (before/after
+  snapshots) plus the JSONL mirror described above. Credentials, password hashes, raw reset
+  tokens, request bodies, headers, and query strings are never logged anywhere.
+- **Retention** — raw request telemetry is kept 90 days; audit logs, sessions, and daily latency
+  aggregates are kept 1 year. Purge past-retention rows with:
+  ```powershell
+  cd backend
+  python scripts/purge_account_observability.py
+  ```
+  Run this on a schedule (cron / Windows Task Scheduler) in production.
 
 ## 📁 Project Structure
 

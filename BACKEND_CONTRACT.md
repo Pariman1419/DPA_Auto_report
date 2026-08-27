@@ -60,6 +60,35 @@ All endpoints require authentication unless marked **[public]**
 // Error 404 — user not found
 ```
 
+### POST /api/auth/reset-password/{token} **[public]** **[rate: 5/min]**
+```
+// token — raw one-time reset token from a link issued by
+// POST /api/admin/accounts/{user_id}/reset-link (shown once in the admin UI,
+// never emailed). Looked up by SHA-256 hash in password_reset_tokens; a
+// DIFFERENT mechanism from the itsdangerous approval-link token above.
+
+// Request
+{ "password": "newSecret123" }
+
+// Response 200
+{ "message": "Password has been reset." }
+
+// Error 400 — link invalid, expired (30 min TTL), or already used (generic
+//              message either way, to avoid leaking which case it was)
+```
+On success: password is updated, `users.session_version` is incremented
+(invalidating every JWT issued before the reset, since protected routes
+compare the token's `sv` claim against the live DB value — see Auth flow
+below), and the action is written to `account_audit_logs`.
+
+**Session invalidation (`sv` claim):** every login mints a JWT carrying
+`sv: session_version` at issue time. Tokens minted before this claim existed
+(no `sv`) are honored exactly as before — no DB lookup. Tokens carrying `sv`
+are compared against the live `users.session_version` on every protected
+request; a mismatch (e.g. after a reset-triggered bump) or a DB outage during
+the check both fail closed with 401, since this is an authentication gate,
+not a best-effort telemetry write.
+
 ---
 
 ## Product Requests — `/api`
@@ -362,6 +391,139 @@ Content-Disposition: attachment; filename="DPA_Report_..."
 ```json
 { "status": "ok" }
 ```
+
+---
+
+## Account Administration — `/api/admin`
+
+All routes below require `role == "admin"` via `Depends(require_role("admin"))`.
+The frontend also hides the Account Management nav item for non-admins, but
+that's a convenience only — every route enforces the role check server-side
+regardless of what the UI shows.
+
+Every lifecycle action (`approve`/`disable`/`restore`/`reset-link`/delete)
+writes an audit row to `account_audit_logs` (before/after JSONB snapshots,
+actor/target, timestamp) and mirrors a sanitized copy to a JSONL file at
+`{AUDIT_LOG_ROOT}/{YYYY-MM-DD}.jsonl` (see Configuration below). The JSONL
+mirror is **fail-open**: if the write fails (permission, disk full,
+unreachable path) it's logged as a warning and swallowed — it never blocks
+or undoes the already-committed DB action/response. No password, password
+hash, reset token, request body, header, or query string is ever written to
+either the audit table or the JSONL mirror; `audit_service._sanitize_state`
+strips any key whose name contains `password`, `hash`, `token`, `secret`,
+`authorization`, or `cookie` as a last line of defense even if a caller
+accidentally includes one.
+
+### GET /api/admin/accounts
+```
+// Query: status, search, cursor, limit (default 50, max 100)
+// Response 200
+{
+  "items": [
+    { "user_id": "EMP001", "full_name": "John Doe", "email": "john@example.com",
+      "role": "QA Engineer", "account_status": "active", "is_active": true,
+      "session_version": 1, "created_at": "2026-08-27T10:00:00+00:00" }
+  ],
+  "next_cursor": "EMP001"   // pass back as ?cursor= for the next page, or null on the last page
+}
+```
+
+### POST /api/admin/accounts/{user_id}/approve
+### POST /api/admin/accounts/{user_id}/restore
+```json
+// Response 200
+{ "user_id": "EMP002", "account_status": "active", "is_active": true }
+
+// Error 404 — user not found
+```
+
+### POST /api/admin/accounts/{user_id}/disable
+```json
+// Response 200
+{ "user_id": "EMP002", "account_status": "disabled", "is_active": false }
+
+// Error 404 — user not found
+// Error 409 — target is the caller's own account, or the last active admin
+```
+
+### POST /api/admin/accounts/{user_id}/reset-link
+```json
+// Response 200 — resetUrl is returned exactly once and never stored raw;
+// only its SHA-256 hash is persisted (password_reset_tokens.token_hash).
+// The link expires 30 minutes after creation and is usable exactly once.
+{ "resetUrl": "http://localhost:9090/reset-password/<one-time-token>" }
+
+// Error 404 — user not found
+```
+
+### DELETE /api/admin/accounts/{user_id}
+```json
+// Request — both fields required; confirmUserId must exactly match {user_id}
+{ "confirmUserId": "EMP002", "reason": "Duplicate account, confirmed with employee" }
+
+// Response 200
+{ "user_id": "EMP002", "deleted": true }
+
+// Error 400 — reason blank, or confirmUserId does not match the target
+// Error 404 — user not found
+// Error 409 — target is the caller's own account, or the last active admin
+// Error 422 — request body missing confirmUserId/reason
+```
+Permanent delete is irreversible: the row is removed from `users`, but an
+audit row (before-state snapshot minus `password_hash`, plus the typed
+`reason`) is written first, on the same connection/transaction as the
+`DELETE`, so the audit trail can never claim a deletion that didn't actually
+happen (or vice versa).
+
+### GET /api/admin/accounts/{user_id}/activity
+```
+// Query: limit (default 50, max 100), cursor (an occurred_at ISO timestamp
+// from a previous page's next_cursor)
+// Response 200 — paged account_audit_logs rows for this account, newest first
+{
+  "items": [
+    { "id": 1, "actor_user_id": "ADMIN1", "target_user_id": "EMP002",
+      "action": "disable", "before_state": {"account_status": "active"},
+      "after_state": {"account_status": "disabled"},
+      "occurred_at": "2026-08-27T10:05:00+00:00" }
+  ],
+  "next_cursor": "2026-08-27T10:05:00+00:00"
+}
+```
+
+### GET /api/admin/accounts/{user_id}/performance
+```
+// Query: start, end (ISO datetimes; half-open range — start inclusive, end
+// exclusive — so results stay aligned with the (user_id, occurred_at DESC)
+// index on request_telemetry; both optional, an omitted bound is unbounded)
+// Response 200 — aggregate, never raw per-request rows
+{
+  "request_count": 240,
+  "error_count": 3,
+  "avg_duration_ms": 84.2,
+  "max_duration_ms": 512.0
+}
+```
+
+### Retention
+
+| Table | Window | Column |
+| --- | --- | --- |
+| `request_telemetry` | 90 days | `occurred_at` |
+| `account_audit_logs` | 1 year | `occurred_at` |
+| `user_sessions` | 1 year | `started_at` |
+| `endpoint_latency_daily` | 1 year | `created_at` |
+| `password_reset_tokens` | 7 days after expiry/use | `used_at` / `expires_at` |
+
+Run the purge manually or on a schedule (e.g. a daily cron/Task Scheduler
+job) from `backend/`:
+```powershell
+python scripts/purge_account_observability.py
+```
+Deletes use half-open, index-aligned predicates (`col < now() - interval
+'...'`, never `DATE(col) < ...`) so they hit the existing indexes instead of
+forcing a full table scan. Only per-table row counts are logged — never row
+contents.
 
 ---
 
