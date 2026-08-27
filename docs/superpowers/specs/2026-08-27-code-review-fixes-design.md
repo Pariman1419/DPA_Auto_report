@@ -115,10 +115,7 @@ Each handler needs the `Request` param added if not already present (required by
 ## 6. Standards — smells (low-risk cleanup)
 
 - **Duplicated inline logger aliasing**: `product_request.py` currently does `from logger import get_logger as _gl` inline at 3 call sites (lines 130, 240, 250). Replace with one module-level `log = get_logger("product_request")` at the top of the file (same pattern as every other backend module), and use `log.info(...)` / `log.error(...)` at those call sites instead.
-- **Hardcoded infra values**: `trigger_pipeline`/`pipeline_status` hardcode `localhost:9091`, `host.docker.internal:9091`, and a literal `D:\Auto_detect\docker-compose.yml` path (lines ~227-229, 262, 281-283). Move these into env-backed settings read once at module load, following the existing `DOC_ROOT`/`TEMPLATE_PATH`/`OUTPUT_DIR` convention:
-  - `PIPELINE_URL` (default `http://localhost:9091`)
-  - `PIPELINE_URL_DOCKER` (default `http://host.docker.internal:9091`)
-  - `PIPELINE_COMPOSE_PATH` (default `D:\Auto_detect\docker-compose.yml`)
+- **Hardcoded infra value**: `trigger_pipeline`'s docker-compose fallback (line 262) hardcodes `D:\Auto_detect\docker-compose.yml` with no override. (Correction from an earlier draft of this spec: the `localhost:9091` / `host.docker.internal:9091` URLs in `trigger_pipeline` and `pipeline_status` are NOT bare hardcodes — they're fallback defaults already overridable via existing `PIPELINE_TRIGGER_URL` / `PIPELINE_STATUS_URL` env vars, lines 226 and 281. Leave those as-is; only the compose path needs a new env var.) Add `PIPELINE_COMPOSE_PATH` (default `D:\Auto_detect\docker-compose.yml`), read once at module load, following the existing `DOC_ROOT`/`TEMPLATE_PATH`/`OUTPUT_DIR` convention.
 - **Mysterious name**: resolved as a side effect of item 3 (the duplicate `_resolve_image_path` is deleted, so the naming collision goes away).
 
 ## 7. Spec doc catch-up — OpenTelemetry
