@@ -17,6 +17,8 @@ venv/
 
 # Dev/debug scripts
 scripts/
+!scripts/
+!scripts/*.py
 
 # Logs
 logs/

@@ -27,6 +27,8 @@ frontend/node_modules/
 output/
 backend/logs/
 backend/scripts/
+!backend/scripts/
+!backend/scripts/*.py
 *.log
 dist/
 build/
