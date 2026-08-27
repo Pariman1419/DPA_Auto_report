@@ -531,6 +531,40 @@ happen (or vice versa).
 }
 ```
 
+### GET /api/admin/sessions
+```
+// Query: user_id (optional filter), limit (default 50, max 100),
+// cursor (a started_at ISO timestamp from a previous page's next_cursor)
+// Response 200 — paged user_sessions rows across all accounts, newest first
+{
+  "items": [
+    { "id": 1, "user_id": "EMP001", "ip_address": "10.153.90.42",
+      "user_agent": "Mozilla/5.0 ...", "session_id": "6c2b...-uuid",
+      "started_at": "2026-08-27T09:00:00+00:00",
+      "last_seen_at": "2026-08-27T09:40:00+00:00",
+      "logged_out_at": null, "expires_at": "2026-08-28T09:00:00+00:00",
+      "revoked_at": null }
+  ],
+  "next_cursor": "2026-08-27T09:00:00+00:00"
+}
+```
+
+### GET /api/admin/performance/daily
+```
+// Query: days (default 30, max 365), route (optional exact-match filter)
+// Response 200 — endpoint_latency_daily rollup rows, newest day first.
+// This table is populated by a scheduled job (telemetry_service.rollup_daily_latency),
+// not by every request -- an empty result means the job hasn't run yet for
+// that range, not that there was no traffic.
+{
+  "items": [
+    { "route": "/api/product-requests", "day": "2026-08-27",
+      "request_count": 240, "error_count": 3,
+      "avg_latency_ms": 84.2, "p95_latency_ms": 210.0, "max_latency_ms": 512.0 }
+  ]
+}
+```
+
 ### Retention
 
 | Table | Window | Column |

@@ -226,6 +226,8 @@ NON_ADMIN_ROUTES = [
     ("delete", "/api/admin/accounts/EMP999"),
     ("get", "/api/admin/accounts/EMP999/activity"),
     ("get", "/api/admin/accounts/EMP999/performance"),
+    ("get", "/api/admin/sessions"),
+    ("get", "/api/admin/performance/daily"),
 ]
 
 
@@ -540,3 +542,66 @@ def test_account_performance_no_date_filters(client, admin_headers):
         response = client.get("/api/admin/accounts/EMP999/performance", headers=admin_headers)
     assert response.status_code == 200
     mock_perf.assert_called_once_with("EMP999", start=None, end=None)
+
+
+# ── sessions (system-wide) ──────────────────────────────────────────────
+
+
+def test_list_sessions_success(client, admin_headers):
+    client.cookies.clear()
+    fake_result = {"items": [{"user_id": "EMP999", "ip_address": "10.1.2.3"}], "next_cursor": None}
+    with patch("routers.account_admin.account_admin_service.sessions", return_value=fake_result) as mock_sessions:
+        response = client.get("/api/admin/sessions?limit=10&cursor=abc", headers=admin_headers)
+    assert response.status_code == 200
+    assert response.json() == fake_result
+    mock_sessions.assert_called_once_with(user_id=None, limit=10, cursor="abc")
+
+
+def test_list_sessions_filtered_by_user(client, admin_headers):
+    client.cookies.clear()
+    fake_result = {"items": [], "next_cursor": None}
+    with patch("routers.account_admin.account_admin_service.sessions", return_value=fake_result) as mock_sessions:
+        response = client.get("/api/admin/sessions?user_id=EMP999", headers=admin_headers)
+    assert response.status_code == 200
+    mock_sessions.assert_called_once_with(user_id="EMP999", limit=50, cursor=None)
+
+
+def test_list_sessions_limit_over_100_rejected(client, admin_headers):
+    client.cookies.clear()
+    response = client.get("/api/admin/sessions?limit=500", headers=admin_headers)
+    assert response.status_code == 422
+
+
+def test_list_sessions_invalid_cursor_rejected(client, admin_headers):
+    client.cookies.clear()
+    with patch("routers.account_admin.account_admin_service.sessions", side_effect=ValueError("invalid sessions cursor")):
+        response = client.get("/api/admin/sessions?cursor=not-a-cursor", headers=admin_headers)
+    assert response.status_code == 400
+
+
+# ── performance/daily (system-wide) ─────────────────────────────────────
+
+
+def test_daily_performance_success(client, admin_headers):
+    client.cookies.clear()
+    fake_result = {"items": [{"route": "/api/product-requests", "day": "2026-08-27", "request_count": 5}]}
+    with patch("routers.account_admin.account_admin_service.daily_performance", return_value=fake_result) as mock_dp:
+        response = client.get("/api/admin/performance/daily?days=7&route=/api/product-requests", headers=admin_headers)
+    assert response.status_code == 200
+    assert response.json() == fake_result
+    mock_dp.assert_called_once_with(days=7, route="/api/product-requests")
+
+
+def test_daily_performance_defaults(client, admin_headers):
+    client.cookies.clear()
+    fake_result = {"items": []}
+    with patch("routers.account_admin.account_admin_service.daily_performance", return_value=fake_result) as mock_dp:
+        response = client.get("/api/admin/performance/daily", headers=admin_headers)
+    assert response.status_code == 200
+    mock_dp.assert_called_once_with(days=30, route=None)
+
+
+def test_daily_performance_days_over_365_rejected(client, admin_headers):
+    client.cookies.clear()
+    response = client.get("/api/admin/performance/daily?days=9999", headers=admin_headers)
+    assert response.status_code == 422

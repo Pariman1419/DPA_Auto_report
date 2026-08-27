@@ -6,6 +6,7 @@ const NAV_ITEMS = [
   { id: 'create',    label: 'Create Report', icon: '+' },
   { id: 'history',   label: 'History',       icon: '◷' },
   { id: 'accounts',  label: 'Account Management', icon: '☰', adminOnly: true },
+  { id: 'monitoring', label: 'System Monitoring', icon: '◆', adminOnly: true },
 ];
 
 export function Sidebar({ page, onNav, user, onLogout }) {

@@ -431,3 +431,100 @@ def performance(
             "max_duration_ms": None,
         }
     return dict(row)
+
+
+# ---------------------------------------------------------------------------
+# sessions
+# ---------------------------------------------------------------------------
+
+
+def sessions(user_id: Optional[str] = None, limit: int = 50, cursor: Optional[str] = None) -> dict:
+    """Paged login-session history, newest first, optionally filtered to one
+    account. System-wide admin view over user_sessions (see schema.sql)."""
+    page_size = _clamp_limit(limit)
+
+    clauses = []
+    params: list = []
+    if user_id:
+        clauses.append("user_id = %s")
+        params.append(user_id)
+    if cursor:
+        try:
+            started_at, row_id = base64.urlsafe_b64decode(cursor.encode()).decode().rsplit("|", 1)
+            clauses.append("(started_at, id) < (%s, %s)")
+            params.extend([started_at, int(row_id)])
+        except (ValueError, UnicodeDecodeError):
+            raise ValueError("invalid sessions cursor")
+    params.append(page_size + 1)
+
+    where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+
+    conn = DBConnector.get_dpa_connection()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                f"""
+                SELECT id, user_id, ip_address, user_agent, session_id,
+                       started_at, last_seen_at, logged_out_at, expires_at, revoked_at
+                FROM user_sessions
+                {where_sql}
+                ORDER BY started_at DESC
+                LIMIT %s
+                """,
+                params,
+            )
+            rows = [dict(r) for r in cur.fetchall()]
+    finally:
+        DBConnector.release_dpa_connection(conn)
+
+    next_cursor = None
+    if len(rows) > page_size:
+        rows = rows[:page_size]
+        last = rows[-1]
+        next_cursor = base64.urlsafe_b64encode(
+            f"{last['started_at'].isoformat()}|{last['id']}".encode()
+        ).decode()
+
+    return {"items": rows, "next_cursor": next_cursor}
+
+
+# ---------------------------------------------------------------------------
+# daily_performance
+# ---------------------------------------------------------------------------
+
+
+def daily_performance(days: int = 30, route: Optional[str] = None) -> dict:
+    """
+    Pre-aggregated per-route daily latency/error rollup from
+    endpoint_latency_daily (see telemetry_service.rollup_daily_latency).
+    That table is populated by a scheduled job, not by every request, so an
+    empty result here means the rollup job hasn't run yet -- not that there
+    was no traffic.
+    """
+    days = min(max(int(days), 1), 365)
+    since = (datetime.now(timezone.utc) - timedelta(days=days)).date()
+
+    clauses = ["day >= %s"]
+    params: list = [since]
+    if route:
+        clauses.append("route = %s")
+        params.append(route)
+
+    conn = DBConnector.get_dpa_connection()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                f"""
+                SELECT route, day, request_count, error_count,
+                       avg_latency_ms, p95_latency_ms, max_latency_ms
+                FROM endpoint_latency_daily
+                WHERE {' AND '.join(clauses)}
+                ORDER BY day DESC, route ASC
+                """,
+                params,
+            )
+            rows = [dict(r) for r in cur.fetchall()]
+    finally:
+        DBConnector.release_dpa_connection(conn)
+
+    return {"items": rows}

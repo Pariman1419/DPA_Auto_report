@@ -169,3 +169,34 @@ def account_performance(
     actor: dict = Depends(require_admin),
 ):
     return account_admin_service.performance(user_id, start=start, end=end)
+
+
+# ---------------------------------------------------------------------------
+# System-wide monitoring views
+# ---------------------------------------------------------------------------
+
+
+@router.get("/sessions")
+@limiter.limit("30/minute")
+def list_sessions(
+    request: Request,
+    user_id: Optional[str] = None,
+    limit: int = Query(default=50, le=100),
+    cursor: Optional[str] = None,
+    actor: dict = Depends(require_admin),
+):
+    try:
+        return account_admin_service.sessions(user_id=user_id, limit=limit, cursor=cursor)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/performance/daily")
+@limiter.limit("30/minute")
+def daily_performance(
+    request: Request,
+    days: int = Query(default=30, le=365),
+    route: Optional[str] = None,
+    actor: dict = Depends(require_admin),
+):
+    return account_admin_service.daily_performance(days=days, route=route)

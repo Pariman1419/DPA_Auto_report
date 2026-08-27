@@ -8,6 +8,7 @@ import { RegisterPage } from './RegisterPage.jsx';
 import { getUser, setUser, logout, apiFetch } from './api.js';
 
 const AccountManagementPage = React.lazy(() => import('./AccountManagementPage.jsx'));
+const SystemMonitoringPage = React.lazy(() => import('./SystemMonitoringPage.jsx'));
 const ResetPasswordPage = React.lazy(() => import('./ResetPasswordPage.jsx'));
 
 export default function App() {
@@ -81,6 +82,11 @@ export default function App() {
           {page === 'accounts' && user?.role === 'admin' && (
             <React.Suspense fallback={<LoadingSpinner />}>
               <AccountManagementPage />
+            </React.Suspense>
+          )}
+          {page === 'monitoring' && user?.role === 'admin' && (
+            <React.Suspense fallback={<LoadingSpinner />}>
+              <SystemMonitoringPage />
             </React.Suspense>
           )}
           {page === 'dashboard' && (
