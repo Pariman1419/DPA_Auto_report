@@ -423,7 +423,7 @@ export function AccountManagementPage() {
             {disabledBusy('disable') ? 'Disabling…' : 'Disable'}
           </Btn>
           <Btn variant="ghost" size="sm" disabled={disabledBusy('reset-link')} onClick={() => runAction(row.user_id, 'reset-link')}>
-            {disabledBusy('reset-link') ? 'Generating…' : 'Reset Link'}
+            {disabledBusy('reset-link') ? 'Generating…' : 'Reset Password'}
           </Btn>
         </div>
       );
