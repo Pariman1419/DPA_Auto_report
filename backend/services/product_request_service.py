@@ -20,19 +20,17 @@ from models.schemas import (
     ProductRequestData,
 )
 
-_IMAGE_WIN_ROOT   = os.getenv("IMAGE_WIN_ROOT",   r"D:\Auto_detect\Result")
-_IMAGE_MOUNT_ROOT = os.getenv("IMAGE_MOUNT_ROOT", _IMAGE_WIN_ROOT)
-
-
 def _translate_image_path(path: str | None) -> str | None:
     """Translate a DB-stored Windows path to the actual path in this environment."""
     if not path:
         return path
+    win_root   = os.getenv("IMAGE_WIN_ROOT",   r"D:\Auto_detect\Result")
+    mount_root = os.getenv("IMAGE_MOUNT_ROOT", win_root)
     norm_path = path.replace("\\", "/")
-    norm_win  = _IMAGE_WIN_ROOT.replace("\\", "/")
+    norm_win  = win_root.replace("\\", "/")
     if norm_path.lower().startswith(norm_win.lower()):
         relative = norm_path[len(norm_win):].lstrip("/")
-        return str(pathlib.PurePosixPath(_IMAGE_MOUNT_ROOT) / relative)
+        return str(pathlib.PurePosixPath(mount_root) / relative)
     return path
 
 DOC_ROOT = os.environ.get("DOC_ROOT", r"D:\DPA\doc")

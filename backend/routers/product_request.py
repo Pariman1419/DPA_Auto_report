@@ -13,7 +13,8 @@ from services.product_request_service import (
     read_product_request, list_product_requests, list_timepoints,
     list_timepoint_folders, get_generation_stats, list_lots, list_lots_registry,
     list_generation_history, get_history_record, delete_history_record,
-    get_next_revision, save_generation_history, list_preview_images, list_preview_imc, list_preview_bond, list_preview_sem
+    get_next_revision, save_generation_history, list_preview_images, list_preview_imc, list_preview_bond, list_preview_sem,
+    _translate_image_path,
 )
 from models.schemas import ProductRequestData, ProductRequestListItem, GenerateReportRequest
 from services.report_generator import DPAReportGenerator, OUTPUT_DIR
@@ -80,7 +81,7 @@ def download_report(path: str, _user=Depends(get_current_user)):
     result_root = pathlib.Path(
         os.getenv("IMAGE_MOUNT_ROOT", os.getenv("IMAGE_WIN_ROOT", r"D:\Auto_detect\Result"))
     ).resolve()
-    requested = _resolve_image_path(path).resolve()
+    requested = pathlib.Path(_translate_image_path(path)).resolve()
 
     if not (requested.is_relative_to(safe_root) or requested.is_relative_to(result_root)):
         raise HTTPException(status_code=403, detail="Access denied")
@@ -177,35 +178,13 @@ def get_preview_bond(pr_number: str, timepoint: str, lot: str, _user=Depends(get
 def get_preview_sem(pr_number: str, timepoint: str, lot: str, _user=Depends(get_current_user)):
     return list_preview_sem(pr_number, timepoint, lot)
 
-def _resolve_image_path(path: str) -> pathlib.Path:
-    """
-    Translate the path from DB (which may be a Windows absolute path) to the
-    actual filesystem path in this environment.
-
-    IMAGE_WIN_ROOT  — prefix stored in DB  (default: D:\\Auto_detect\\Result)
-    IMAGE_MOUNT_ROOT — where that folder is mounted here (default: same as WIN_ROOT)
-    """
-    win_root   = os.getenv("IMAGE_WIN_ROOT",   r"D:\Auto_detect\Result")
-    mount_root = os.getenv("IMAGE_MOUNT_ROOT", win_root)
-
-    # Normalise separators for comparison (handle both \ and /)
-    norm_path = path.replace("\\", "/")
-    norm_win  = win_root.replace("\\", "/")
-
-    if norm_path.lower().startswith(norm_win.lower()):
-        relative = norm_path[len(norm_win):].lstrip("/")
-        path = str(pathlib.PurePosixPath(mount_root) / relative)
-
-    return pathlib.Path(path)
-
-
 @router.get("/image")
 def get_image(path: str, _user=Depends(get_current_user)):
     """Serve an image from the Auto_detect Result folder."""
     mount_root = os.getenv("IMAGE_MOUNT_ROOT",
                            os.getenv("IMAGE_WIN_ROOT", r"D:\Auto_detect\Result"))
     _image_root = pathlib.Path(mount_root).resolve()
-    requested   = _resolve_image_path(path).resolve()
+    requested   = pathlib.Path(_translate_image_path(path)).resolve()
 
     if not requested.is_relative_to(_image_root):
         raise HTTPException(status_code=403, detail="Access denied")
