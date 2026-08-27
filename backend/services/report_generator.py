@@ -9,28 +9,13 @@ from pptx.util import Inches
 from pptx.oxml.ns import qn
 from PIL import Image as PILImage
 
-from services.product_request_service import fetch_full_report_data
+from services.product_request_service import fetch_full_report_data, _translate_image_path
 from logger import get_logger
 
 log = get_logger("report_generator")
 
 TEMPLATE_PATH = os.environ.get("TEMPLATE_PATH", r"D:\DPA\Template\DPA report.pptx")
 OUTPUT_DIR    = os.environ.get("OUTPUT_DIR",    r"D:\DPA\output")
-
-_IMAGE_WIN_ROOT   = os.getenv("IMAGE_WIN_ROOT",   r"D:\Auto_detect\Result")
-_IMAGE_MOUNT_ROOT = os.getenv("IMAGE_MOUNT_ROOT", _IMAGE_WIN_ROOT)
-
-
-def _translate_image_path(path: str | None) -> str | None:
-    """Translate a DB-stored Windows path to the actual path in this environment."""
-    if not path:
-        return path
-    norm_path = path.replace("\\", "/")
-    norm_win  = _IMAGE_WIN_ROOT.replace("\\", "/")
-    if norm_path.lower().startswith(norm_win.lower()):
-        relative = norm_path[len(norm_win):].lstrip("/")
-        return str(pathlib.PurePosixPath(_IMAGE_MOUNT_ROOT) / relative)
-    return path
 
 
 @lru_cache(maxsize=512)
