@@ -8,7 +8,7 @@ Self/last-admin protection lives here, not in the service layer, because it
 depends on "who is asking" (the authenticated actor from the JWT), which is
 HTTP-request context -- account_admin_service only knows what it's told.
 """
-from datetime import datetime
+from datetime import date, datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -200,3 +200,21 @@ def daily_performance(
     actor: dict = Depends(require_admin),
 ):
     return account_admin_service.daily_performance(days=days, route=route)
+
+
+@router.get("/performance/daily/detail")
+@limiter.limit("30/minute")
+def daily_performance_detail(
+    request: Request,
+    route: str,
+    day: date,
+    limit: int = Query(default=50, le=100),
+    cursor: Optional[str] = None,
+    actor: dict = Depends(require_admin),
+):
+    """Drill-down for one row of GET /performance/daily: which user made
+    each request behind that route+day's aggregate counts."""
+    try:
+        return account_admin_service.daily_performance_detail(route, day, limit=limit, cursor=cursor)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))

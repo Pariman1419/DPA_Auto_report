@@ -553,15 +553,33 @@ happen (or vice versa).
 ```
 // Query: days (default 30, max 365), route (optional exact-match filter)
 // Response 200 — endpoint_latency_daily rollup rows, newest day first.
-// This table is populated by a scheduled job (telemetry_service.rollup_daily_latency),
-// not by every request -- an empty result means the job hasn't run yet for
-// that range, not that there was no traffic.
+// Populated once a day by an in-process background task owned by the app's
+// lifespan (see backend/main.py's _daily_rollup_loop, TELEMETRY_ROLLUP_HOUR_UTC)
+// -- not by every request. An empty result for today means that day's slot
+// hasn't run yet, not that there was no traffic.
 {
   "items": [
     { "route": "/api/product-requests", "day": "2026-08-27",
       "request_count": 240, "error_count": 3,
       "avg_latency_ms": 84.2, "p95_latency_ms": 210.0, "max_latency_ms": 512.0 }
   ]
+}
+```
+
+### GET /api/admin/performance/daily/detail
+```
+// Query: route (required, exact match), day (required, YYYY-MM-DD, UTC
+// calendar day), limit (default 50, max 100),
+// cursor (an occurred_at ISO timestamp from a previous page's next_cursor)
+// Response 200 — raw request_telemetry rows for that route+day, newest
+// first: drill-down for one row of GET /performance/daily, showing which
+// user made each request behind its aggregate counts.
+{
+  "items": [
+    { "id": 1, "user_id": "EMP001", "method": "GET", "status_code": 200,
+      "duration_ms": 42.0, "occurred_at": "2026-08-27T09:00:00+00:00" }
+  ],
+  "next_cursor": null
 }
 ```
 

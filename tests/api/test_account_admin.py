@@ -228,6 +228,7 @@ NON_ADMIN_ROUTES = [
     ("get", "/api/admin/accounts/EMP999/performance"),
     ("get", "/api/admin/sessions"),
     ("get", "/api/admin/performance/daily"),
+    ("get", "/api/admin/performance/daily/detail?route=/api/health&day=2026-08-27"),
 ]
 
 
@@ -605,3 +606,43 @@ def test_daily_performance_days_over_365_rejected(client, admin_headers):
     client.cookies.clear()
     response = client.get("/api/admin/performance/daily?days=9999", headers=admin_headers)
     assert response.status_code == 422
+
+
+# ── performance/daily/detail (drill-down) ───────────────────────────────
+
+
+def test_daily_performance_detail_success(client, admin_headers):
+    import datetime as dt
+
+    client.cookies.clear()
+    fake_result = {"items": [{"user_id": "EMP001", "method": "GET", "status_code": 200, "duration_ms": 42}], "next_cursor": None}
+    with patch("routers.account_admin.account_admin_service.daily_performance_detail", return_value=fake_result) as mock_detail:
+        response = client.get(
+            "/api/admin/performance/daily/detail?route=/api/product-requests&day=2026-08-27&limit=10",
+            headers=admin_headers,
+        )
+    assert response.status_code == 200
+    assert response.json() == fake_result
+    args, kwargs = mock_detail.call_args
+    assert args[0] == "/api/product-requests"
+    assert args[1] == dt.date(2026, 8, 27)
+    assert kwargs == {"limit": 10, "cursor": None}
+
+
+def test_daily_performance_detail_requires_route_and_day(client, admin_headers):
+    client.cookies.clear()
+    response = client.get("/api/admin/performance/daily/detail", headers=admin_headers)
+    assert response.status_code == 422
+
+
+def test_daily_performance_detail_invalid_cursor_rejected(client, admin_headers):
+    client.cookies.clear()
+    with patch(
+        "routers.account_admin.account_admin_service.daily_performance_detail",
+        side_effect=ValueError("invalid daily-performance-detail cursor"),
+    ):
+        response = client.get(
+            "/api/admin/performance/daily/detail?route=/api/health&day=2026-08-27&cursor=bad",
+            headers=admin_headers,
+        )
+    assert response.status_code == 400

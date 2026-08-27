@@ -15,7 +15,7 @@ import hashlib
 import os
 import secrets
 import base64
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
 from psycopg2.extras import RealDictCursor
@@ -528,3 +528,60 @@ def daily_performance(days: int = 30, route: Optional[str] = None) -> dict:
         DBConnector.release_dpa_connection(conn)
 
     return {"items": rows}
+
+
+# ---------------------------------------------------------------------------
+# daily_performance_detail
+# ---------------------------------------------------------------------------
+
+
+def daily_performance_detail(
+    route: str, day: date, limit: int = 50, cursor: Optional[str] = None
+) -> dict:
+    """
+    Raw request_telemetry rows for one route on one calendar day (UTC),
+    newest first -- who actually made each of the requests a
+    daily_performance() row summarizes. Drill-down for a single clicked row
+    in the Daily Performance view, not a general telemetry browser.
+    """
+    page_size = _clamp_limit(limit)
+    day_start = datetime.combine(day, datetime.min.time(), tzinfo=timezone.utc)
+    day_end = day_start + timedelta(days=1)
+
+    clauses = ["route = %s", "occurred_at >= %s", "occurred_at < %s"]
+    params: list = [route, day_start, day_end]
+    if cursor:
+        try:
+            occurred_at, row_id = base64.urlsafe_b64decode(cursor.encode()).decode().rsplit("|", 1)
+            clauses.append("(occurred_at, id) < (%s, %s)")
+            params.extend([occurred_at, int(row_id)])
+        except (ValueError, UnicodeDecodeError):
+            raise ValueError("invalid daily-performance-detail cursor")
+    params.append(page_size + 1)
+
+    conn = DBConnector.get_dpa_connection()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                f"""
+                SELECT id, user_id, method, status_code, duration_ms, occurred_at
+                FROM request_telemetry
+                WHERE {' AND '.join(clauses)}
+                ORDER BY occurred_at DESC
+                LIMIT %s
+                """,
+                params,
+            )
+            rows = [dict(r) for r in cur.fetchall()]
+    finally:
+        DBConnector.release_dpa_connection(conn)
+
+    next_cursor = None
+    if len(rows) > page_size:
+        rows = rows[:page_size]
+        last = rows[-1]
+        next_cursor = base64.urlsafe_b64encode(
+            f"{last['occurred_at'].isoformat()}|{last['id']}".encode()
+        ).decode()
+
+    return {"items": rows, "next_cursor": next_cursor}

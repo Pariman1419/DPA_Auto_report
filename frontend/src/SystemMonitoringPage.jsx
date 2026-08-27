@@ -121,12 +121,81 @@ function SessionsTab() {
 // endpoint_latency_daily. That table only fills in once the scheduled
 // rollup job runs, so an empty result here is explained, not hidden.
 // ---------------------------------------------------------------------------
+function DailyPerformanceDetail({ route, day }) {
+  const [items, setItems] = React.useState([]);
+  const [cursor, setCursor] = React.useState(null);
+  const [loading, setLoading] = React.useState(false);
+  const [error, setError] = React.useState('');
+  const [loadedOnce, setLoadedOnce] = React.useState(false);
+
+  const load = React.useCallback(async (nextCursor) => {
+    setLoading(true);
+    setError('');
+    try {
+      const params = new URLSearchParams({ route, day, limit: '25' });
+      if (nextCursor) params.set('cursor', nextCursor);
+      const res = await apiFetch(`/api/admin/performance/daily/detail?${params}`);
+      if (res.status === 403) { setError('You do not have permission to view this.'); return; }
+      if (!res.ok) { setError('Failed to load request detail.'); return; }
+      const data = await res.json();
+      setItems(prev => nextCursor ? [...prev, ...(data.items || [])] : (data.items || []));
+      setCursor(data.next_cursor || null);
+    } catch {
+      setError('Failed to load request detail.');
+    } finally {
+      setLoading(false);
+      setLoadedOnce(true);
+    }
+  }, [route, day]);
+
+  React.useEffect(() => { load(null); }, [load]);
+
+  return (
+    <div style={{ padding: '12px 16px', background: '#fafafa' }}>
+      {error && <div style={{ fontSize: 12, color: '#ef4444' }}>{error}</div>}
+      {!error && loadedOnce && items.length === 0 && !loading && (
+        <div style={{ fontSize: 12, color: '#898989' }}>No individual requests recorded for this route/day.</div>
+      )}
+      {items.length > 0 && (
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead>
+            <tr>
+              {['When', 'User', 'Method', 'Status', 'Duration (ms)'].map(h => (
+                <th key={h} style={{ ...thStyle, padding: '6px 10px' }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {items.map(row => (
+              <tr key={row.id} style={{ borderTop: '1px solid #eee' }}>
+                <td style={{ ...tdStyle, padding: '6px 10px', whiteSpace: 'nowrap', color: '#898989' }}>{fmtDate(row.occurred_at)}</td>
+                <td style={{ ...tdStyle, padding: '6px 10px' }}>{row.user_id || '—'}</td>
+                <td style={{ ...tdStyle, padding: '6px 10px' }}>{row.method || '—'}</td>
+                <td style={{ ...tdStyle, padding: '6px 10px', color: row.status_code >= 400 ? '#ef4444' : '#242424' }}>{row.status_code ?? '—'}</td>
+                <td style={{ ...tdStyle, padding: '6px 10px' }}>{row.duration_ms != null ? Math.round(row.duration_ms) : '—'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {cursor && (
+        <div style={{ marginTop: 8, display: 'flex', justifyContent: 'center' }}>
+          <Btn variant="ghost" size="sm" onClick={() => load(cursor)} disabled={loading}>
+            {loading ? 'Loading…' : 'Load more'}
+          </Btn>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function DailyPerformanceTab() {
   const [days, setDays] = React.useState('30');
   const [routeFilter, setRouteFilter] = React.useState('');
   const [items, setItems] = React.useState([]);
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState('');
+  const [expandedKey, setExpandedKey] = React.useState(null); // `${route}|${day}` | null
 
   const load = React.useCallback(async () => {
     setLoading(true);
@@ -182,6 +251,9 @@ function DailyPerformanceTab() {
         </div>
       )}
       {items.length > 0 && (
+        <div style={{ fontSize: 12, color: '#898989', marginBottom: 8 }}>Click a row to see which users made those requests.</div>
+      )}
+      {items.length > 0 && (
         <div style={{ border: '1px solid #f0f0f0', borderRadius: 8, overflow: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
@@ -190,17 +262,33 @@ function DailyPerformanceTab() {
               </tr>
             </thead>
             <tbody>
-              {items.map((row, i) => (
-                <tr key={`${row.route}-${row.day}-${i}`} style={{ borderTop: '1px solid #f5f5f5' }}>
-                  <td style={{ ...tdStyle, whiteSpace: 'nowrap', color: '#898989' }}>{row.day}</td>
-                  <td style={tdStyle}>{row.route}</td>
-                  <td style={tdStyle}>{row.request_count}</td>
-                  <td style={tdStyle}>{row.error_count}</td>
-                  <td style={tdStyle}>{row.avg_latency_ms != null ? Math.round(row.avg_latency_ms) : '—'}</td>
-                  <td style={tdStyle}>{row.p95_latency_ms != null ? Math.round(row.p95_latency_ms) : '—'}</td>
-                  <td style={tdStyle}>{row.max_latency_ms != null ? Math.round(row.max_latency_ms) : '—'}</td>
-                </tr>
-              ))}
+              {items.map((row, i) => {
+                const key = `${row.route}|${row.day}`;
+                const expanded = expandedKey === key;
+                return (
+                  <React.Fragment key={`${key}-${i}`}>
+                    <tr
+                      onClick={() => setExpandedKey(expanded ? null : key)}
+                      style={{ borderTop: '1px solid #f5f5f5', cursor: 'pointer', background: expanded ? '#f5f5f5' : undefined }}
+                    >
+                      <td style={{ ...tdStyle, whiteSpace: 'nowrap', color: '#898989' }}>{row.day}</td>
+                      <td style={tdStyle}>{row.route}</td>
+                      <td style={tdStyle}>{row.request_count}</td>
+                      <td style={tdStyle}>{row.error_count}</td>
+                      <td style={tdStyle}>{row.avg_latency_ms != null ? Math.round(row.avg_latency_ms) : '—'}</td>
+                      <td style={tdStyle}>{row.p95_latency_ms != null ? Math.round(row.p95_latency_ms) : '—'}</td>
+                      <td style={tdStyle}>{row.max_latency_ms != null ? Math.round(row.max_latency_ms) : '—'}</td>
+                    </tr>
+                    {expanded && (
+                      <tr>
+                        <td colSpan={7} style={{ padding: 0 }}>
+                          <DailyPerformanceDetail route={row.route} day={row.day} />
+                        </td>
+                      </tr>
+                    )}
+                  </React.Fragment>
+                );
+              })}
             </tbody>
           </table>
         </div>
