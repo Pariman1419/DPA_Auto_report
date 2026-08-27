@@ -2,12 +2,29 @@ import React, { useState, useEffect } from 'react';
 import { Sidebar } from './Sidebar.jsx';
 import { CreateReport } from './CreateReport.jsx';
 import { HistoryPage } from './HistoryPage.jsx';
-import { CalSans, Btn } from './Components.jsx';
+import { CalSans, Btn, LoadingSpinner } from './Components.jsx';
 import { LoginPage } from './LoginPage.jsx';
 import { RegisterPage } from './RegisterPage.jsx';
 import { getUser, setUser, logout, apiFetch } from './api.js';
 
+const AccountManagementPage = React.lazy(() => import('./AccountManagementPage.jsx'));
+const ResetPasswordPage = React.lazy(() => import('./ResetPasswordPage.jsx'));
+
 export default function App() {
+  // Public reset-password route: a real, shareable URL (the admin copies it
+  // and sends it to the account holder, who isn't logged in and has no
+  // `page` state to navigate to). Checked BEFORE the auth gate below so it
+  // renders unconditionally, logged in or not.
+  const RESET_PREFIX = '/reset-password/';
+  if (window.location.pathname.startsWith(RESET_PREFIX)) {
+    const token = window.location.pathname.slice(RESET_PREFIX.length);
+    return (
+      <React.Suspense fallback={<div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#f7f7f7' }}><LoadingSpinner /></div>}>
+        <ResetPasswordPage token={token} />
+      </React.Suspense>
+    );
+  }
+
   const [page, setPage] = useState('create');
   const [authMode, setAuthMode] = useState('login'); // 'login' | 'register'
   const [stats, setStats] = useState({ total: 0, generated: 0, failed: 0 });
@@ -61,6 +78,11 @@ export default function App() {
         <div style={{ maxWidth: 1000, margin: '0 auto' }}>
           {page === 'create' && <CreateReport user={user} />}
           {page === 'history' && <HistoryPage />}
+          {page === 'accounts' && user?.role === 'admin' && (
+            <React.Suspense fallback={<LoadingSpinner />}>
+              <AccountManagementPage />
+            </React.Suspense>
+          )}
           {page === 'dashboard' && (
             <div>
               <CalSans size={32} style={{ display: 'block', marginBottom: 12 }}>Dashboard</CalSans>

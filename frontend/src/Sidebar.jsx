@@ -5,9 +5,13 @@ const NAV_ITEMS = [
   { id: 'dashboard', label: 'Dashboard',     icon: '▦' },
   { id: 'create',    label: 'Create Report', icon: '+' },
   { id: 'history',   label: 'History',       icon: '◷' },
+  { id: 'accounts',  label: 'Account Management', icon: '☰', adminOnly: true },
 ];
 
 export function Sidebar({ page, onNav, user, onLogout }) {
+  // Hiding this nav item is only a convenience — the backend is the real
+  // gate on every /api/admin/* route.
+  const navItems = NAV_ITEMS.filter(item => !item.adminOnly || user?.role === 'admin');
   const getInitials = (name) => {
     if (!name) return '??';
     const parts = name.split(' ');
@@ -30,7 +34,7 @@ export function Sidebar({ page, onNav, user, onLogout }) {
 
       {/* Nav items */}
       <nav style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 2, padding: '0 10px' }}>
-        {NAV_ITEMS.map(item => {
+        {navItems.map(item => {
           const active = page === item.id;
           return (
             <button key={item.id} onClick={() => onNav(item.id)} style={{
