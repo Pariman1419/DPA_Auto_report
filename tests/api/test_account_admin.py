@@ -167,17 +167,30 @@ def test_account_admin_schema(pg_container):
             assert "token" not in reset_cols
             assert "raw_token" not in reset_cols
 
-            # --- required indexes -------------------------------------------
-            cur.execute("""
-                SELECT indexname, indexdef FROM pg_indexes
-                WHERE schemaname = 'public'
-            """)
-            indexdefs = " ".join(row[1] for row in cur.fetchall())
+            # --- required indexes (checked per-table so an index on the
+            # wrong table cannot incorrectly satisfy the assertion) ---------
+            def _indexdefs_for(table_name):
+                cur.execute(
+                    "SELECT indexdef FROM pg_indexes "
+                    "WHERE schemaname = 'public' AND tablename = %s",
+                    (table_name,),
+                )
+                return " ".join(row[0] for row in cur.fetchall())
 
-            assert "target_user_id" in indexdefs and "occurred_at" in indexdefs
-            assert "(user_id, occurred_at" in indexdefs.replace(" DESC", "") \
-                or "(user_id, occurred_at DESC)" in indexdefs
-            assert "(route, occurred_at" in indexdefs.replace(" DESC", "") \
-                or "(route, occurred_at DESC)" in indexdefs
+            audit_indexdefs = _indexdefs_for("account_audit_logs")
+            assert "(target_user_id, occurred_at DESC)" in audit_indexdefs, \
+                "account_audit_logs missing (target_user_id, occurred_at DESC) index"
+            assert "(actor_user_id, occurred_at DESC)" in audit_indexdefs, \
+                "account_audit_logs missing (actor_user_id, occurred_at DESC) index"
+
+            session_indexdefs = _indexdefs_for("user_sessions")
+            assert "(user_id, started_at DESC)" in session_indexdefs, \
+                "user_sessions missing (user_id, started_at DESC) index"
+
+            telemetry_indexdefs = _indexdefs_for("request_telemetry")
+            assert "(user_id, occurred_at DESC)" in telemetry_indexdefs, \
+                "request_telemetry missing (user_id, occurred_at DESC) index"
+            assert "(route, occurred_at DESC)" in telemetry_indexdefs, \
+                "request_telemetry missing (route, occurred_at DESC) index"
     finally:
         conn.close()

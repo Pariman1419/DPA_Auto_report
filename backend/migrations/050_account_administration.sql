@@ -28,6 +28,8 @@ CREATE TABLE IF NOT EXISTS account_audit_logs (
 
 CREATE INDEX IF NOT EXISTS idx_account_audit_logs_target_occurred
     ON account_audit_logs (target_user_id, occurred_at DESC);
+CREATE INDEX IF NOT EXISTS idx_account_audit_logs_actor_occurred
+    ON account_audit_logs (actor_user_id, occurred_at DESC);
 
 -- ---------------------------------------------------------------------------
 -- user_sessions — active/expired login sessions, used to support session
@@ -38,13 +40,26 @@ CREATE TABLE IF NOT EXISTS user_sessions (
     user_id     VARCHAR(50)   NOT NULL,
     ip_address  VARCHAR(64),
     user_agent  TEXT,
-    created_at  TIMESTAMPTZ   NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    started_at  TIMESTAMPTZ   NOT NULL DEFAULT CURRENT_TIMESTAMP,
     expires_at  TIMESTAMPTZ,
     revoked_at  TIMESTAMPTZ
 );
 
-CREATE INDEX IF NOT EXISTS idx_user_sessions_user_created
-    ON user_sessions (user_id, created_at DESC);
+-- Idempotent rename for databases that already have the old column name
+-- from a prior run of this migration (created_at -> started_at).
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'user_sessions' AND column_name = 'created_at'
+    ) THEN
+        ALTER TABLE user_sessions RENAME COLUMN created_at TO started_at;
+    END IF;
+END $$;
+
+DROP INDEX IF EXISTS idx_user_sessions_user_created;
+CREATE INDEX IF NOT EXISTS idx_user_sessions_user_started
+    ON user_sessions (user_id, started_at DESC);
 
 -- ---------------------------------------------------------------------------
 -- request_telemetry — per-request timing/status, prunable at 90 days.
